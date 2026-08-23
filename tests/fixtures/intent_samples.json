@@ -1,0 +1,12 @@
+[
+  {"text": "昨天吃了多少蛋白质？", "intent": "data_query"},
+  {"text": "记录午餐：鸡胸肉 200g", "intent": "manual_entry"},
+  {"text": "记录体重 72.5kg", "intent": "manual_entry"},
+  {"text": "今天不练了，改成休息", "intent": "plan_adjust"},
+  {"text": "近30天体脂变化趋势", "intent": "trend_analysis"},
+  {"text": "目标体重设为70kg", "intent": "goal_setting"},
+  {"text": "同步最近7天训记数据", "intent": "sync_trigger"},
+  {"text": "你好", "intent": "general"},
+  {"text": "查询今天热量", "intent": "data_query"},
+  {"text": "添加早餐 鸡蛋 2个", "intent": "manual_entry"}
+]

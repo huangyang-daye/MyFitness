@@ -1,0 +1,234 @@
+import json
+import logging
+import time as _time
+from collections.abc import Iterator
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any
+
+import httpx
+
+from myfitness.config import Settings, get_settings
+from myfitness.llm.guard import get_llm_guard
+
+logger = logging.getLogger(__name__)
+
+RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
+MAX_RETRIES = 2
+RETRY_BACKOFF_SECONDS = 0.5
+
+
+class LlmUnavailableError(RuntimeError):
+    """LLM 在重试后仍不可用。"""
+
+
+@dataclass(frozen=True)
+class LlmConfig:
+    base_url: str
+    api_key: str
+    model: str
+    temperature: float
+    max_tokens: int | None
+    timeout: int
+
+    @property
+    def chat_completions_url(self) -> str:
+        base = self.base_url.rstrip("/")
+        if base.endswith("/chat/completions"):
+            return base
+        return f"{base}/chat/completions"
+
+    def masked_api_key(self) -> str:
+        if len(self.api_key) <= 4:
+            return "****"
+        return f"****{self.api_key[-4:]}"
+
+
+def get_llm_config(settings: Settings | None = None) -> LlmConfig:
+    s = settings or get_settings()
+    api_key = s.resolved_llm_api_key()
+    if not api_key:
+        raise ValueError(
+            "LLM 未配置：请在 .env 中设置 LLM_API_KEY（或 OPENAI_API_KEY）"
+        )
+    if not s.llm_model:
+        raise ValueError("LLM 未配置：请在 .env 中设置 LLM_MODEL")
+
+    return LlmConfig(
+        base_url=s.llm_base_url.rstrip("/"),
+        api_key=api_key,
+        model=s.llm_model,
+        temperature=s.llm_temperature,
+        max_tokens=s.llm_max_tokens,
+        timeout=s.llm_timeout,
+    )
+
+
+def is_llm_configured(settings: Settings | None = None) -> bool:
+    s = settings or get_settings()
+    return bool(s.resolved_llm_api_key() and s.llm_model)
+
+
+@lru_cache
+def get_llm():
+    """返回 LangChain ChatOpenAI 实例（需安装 agents 可选依赖）。"""
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError as exc:
+        raise ImportError(
+            "使用 Agent/LLM 功能需安装：pip install -e \".[agents]\""
+        ) from exc
+
+    cfg = get_llm_config()
+    kwargs: dict[str, Any] = {
+        "model": cfg.model,
+        "api_key": cfg.api_key,
+        "base_url": cfg.base_url,
+        "temperature": cfg.temperature,
+        "timeout": cfg.timeout,
+    }
+    if cfg.max_tokens is not None:
+        kwargs["max_tokens"] = cfg.max_tokens
+
+    logger.info(
+        "LLM 已激活: model=%s base_url=%s key=%s",
+        cfg.model,
+        cfg.base_url,
+        cfg.masked_api_key(),
+    )
+    return ChatOpenAI(**kwargs)
+
+
+def probe_llm_connection(
+    prompt: str = "回复 OK",
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """通过 OpenAI 兼容 /chat/completions 探测 LLM 连通性（不依赖 LangChain）。"""
+    cfg = get_llm_config(settings)
+    payload: dict[str, Any] = {
+        "model": cfg.model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": cfg.temperature,
+    }
+    if cfg.max_tokens is not None:
+        payload["max_tokens"] = cfg.max_tokens
+
+    headers = {
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+    }
+
+    with httpx.Client(timeout=float(cfg.timeout)) as client:
+        response = client.post(cfg.chat_completions_url, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+
+    content = ""
+    choices = data.get("choices") or []
+    if choices:
+        message = choices[0].get("message") or {}
+        content = message.get("content") or ""
+
+    usage = data.get("usage") or {}
+    return {
+        "model": cfg.model,
+        "base_url": cfg.base_url,
+        "reply": content.strip(),
+        "usage": usage,
+    }
+
+
+def _parse_stream_line(line: str) -> str | None:
+    if not line.startswith("data:"):
+        return None
+    payload = line[5:].strip()
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    choices = data.get("choices") or []
+    if not choices:
+        return None
+    choice = choices[0]
+    delta = choice.get("delta") or {}
+    content = delta.get("content")
+    if content:
+        return content
+    message = choice.get("message") or {}
+    return message.get("content")
+
+
+def stream_chat_completion(
+    messages: list[dict[str, str]],
+    settings: Settings | None = None,
+) -> Iterator[str]:
+    """OpenAI 兼容 SSE 流式输出：限频 → 重试 → 熔断记录。
+
+    首个 token 已输出后的失败不重试（避免重复输出），直接结束流。
+    """
+    cfg = get_llm_config(settings)
+    guard = get_llm_guard()
+    guard.acquire()
+    try:
+        yield from _stream_with_retry(cfg, messages)
+        guard.record_success()
+    except Exception as exc:
+        guard.record_failure(str(exc))
+        raise
+
+
+def _stream_with_retry(
+    cfg: LlmConfig,
+    messages: list[dict[str, str]],
+) -> Iterator[str]:
+    payload: dict[str, Any] = {
+        "model": cfg.model,
+        "messages": messages,
+        "temperature": cfg.temperature,
+        "stream": True,
+    }
+    if cfg.max_tokens is not None:
+        payload["max_tokens"] = cfg.max_tokens
+
+    headers = {
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+
+    first_token_emitted = False
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with httpx.Client(timeout=float(cfg.timeout)) as client:
+                with client.stream(
+                    "POST",
+                    cfg.chat_completions_url,
+                    headers=headers,
+                    json=payload,
+                ) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        token = _parse_stream_line(line)
+                        if token:
+                            first_token_emitted = True
+                            yield token
+                    return
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            retryable = status in RETRYABLE_STATUS and not first_token_emitted
+            logger.warning("LLM HTTP %s（attempt %d/%d）", status, attempt + 1, MAX_RETRIES + 1)
+            if not retryable or attempt >= MAX_RETRIES:
+                raise LlmUnavailableError(f"LLM 服务不可用: HTTP {status}") from exc
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            if first_token_emitted:
+                return  # 已有部分输出，静默结束避免重复
+            logger.warning("LLM 网络异常（attempt %d/%d）: %s", attempt + 1, MAX_RETRIES + 1, exc)
+            if attempt >= MAX_RETRIES:
+                raise LlmUnavailableError(f"LLM 连接失败: {exc}") from exc
+
+        _time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+
+    raise LlmUnavailableError("LLM 调用失败：重试耗尽")

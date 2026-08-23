@@ -1,0 +1,1356 @@
+[
+  {
+    "id": 1,
+    "text": "昨天吃了多少蛋白质？",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "昨天",
+      "蛋白"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 2,
+    "text": "今天热量摄入多少？",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "今天",
+      "热量"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 3,
+    "text": "查询今天体重",
+    "intent": "data_query",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "今天",
+      "体重"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 4,
+    "text": "昨天训练了吗",
+    "intent": "data_query",
+    "domain": "training",
+    "needs_db": true,
+    "expected_tools": [
+      "query_training_logs"
+    ],
+    "tags": [
+      "昨天",
+      "训练"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 5,
+    "text": "2026-08-21 练了什么动作",
+    "intent": "data_query",
+    "domain": "training",
+    "needs_db": true,
+    "expected_tools": [
+      "query_training_logs"
+    ],
+    "tags": [
+      "具体日期",
+      "训练明细"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 6,
+    "text": "前天碳水吃了多少",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "前天",
+      "碳水"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 7,
+    "text": "午餐吃了什么",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "午餐"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 8,
+    "text": "我最近的体脂是多少",
+    "intent": "data_query",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "体脂"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 9,
+    "text": "查询昨天晚餐记录",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "晚餐"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 10,
+    "text": "今天脂肪摄入超标了吗",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "脂肪"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 11,
+    "text": "8月21号深蹲做了多少组",
+    "intent": "data_query",
+    "domain": "training",
+    "needs_db": true,
+    "expected_tools": [
+      "query_training_logs"
+    ],
+    "tags": [
+      "具体日期",
+      "组数"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 12,
+    "text": "昨天卧推重量多少",
+    "intent": "data_query",
+    "domain": "training",
+    "needs_db": true,
+    "expected_tools": [
+      "query_training_logs"
+    ],
+    "tags": [
+      "卧推"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 13,
+    "text": "查询近7天吃了多少蛋白",
+    "intent": "data_query",
+    "domain": null,
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "近7天"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 14,
+    "text": "今天早餐记录有哪些",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "早餐"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 15,
+    "text": "我的体重现在多少kg",
+    "intent": "data_query",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "体重"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 16,
+    "text": "昨天摄入总热量",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "热量"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 17,
+    "text": "查询2026-08-20训练详情",
+    "intent": "data_query",
+    "domain": "training",
+    "needs_db": true,
+    "expected_tools": [
+      "query_training_logs"
+    ],
+    "tags": [
+      "具体日期"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 18,
+    "text": "今天吃了几个鸡蛋",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "食物"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 19,
+    "text": "昨天有没有记录体重",
+    "intent": "data_query",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "体重"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 20,
+    "text": "查询零食吃了什么",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "零食"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 21,
+    "text": "今天练腿了吗",
+    "intent": "data_query",
+    "domain": "training",
+    "needs_db": true,
+    "expected_tools": [
+      "query_training_logs"
+    ],
+    "tags": [
+      "训练"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 22,
+    "text": "昨天蛋白质够吗",
+    "intent": "data_query",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_nutrition_logs"
+    ],
+    "tags": [
+      "蛋白"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 23,
+    "text": "记录体重 72.5kg",
+    "intent": "manual_entry",
+    "domain": "body",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "体重"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 24,
+    "text": "录入今天体脂 18.2%",
+    "intent": "manual_entry",
+    "domain": "body",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "体脂"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 25,
+    "text": "添加早餐 鸡蛋 2个",
+    "intent": "manual_entry",
+    "domain": "nutrition",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "早餐"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 26,
+    "text": "记录午餐：鸡胸肉 200g",
+    "intent": "manual_entry",
+    "domain": "nutrition",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "午餐"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 27,
+    "text": "午餐吃了牛肉 150g 米饭 200g",
+    "intent": "manual_entry",
+    "domain": "nutrition",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "多食物"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 28,
+    "text": "记录晚餐 三文鱼 120g",
+    "intent": "manual_entry",
+    "domain": "nutrition",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "晚餐"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 29,
+    "text": "添加体重 71.8",
+    "intent": "manual_entry",
+    "domain": "body",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 30,
+    "text": "录入零食 坚果 30g",
+    "intent": "manual_entry",
+    "domain": "nutrition",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "零食"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 31,
+    "text": "记录 2026-08-22 体重 73kg",
+    "intent": "manual_entry",
+    "domain": "body",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "具体日期"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 32,
+    "text": "添加食物 苹果 1个",
+    "intent": "manual_entry",
+    "domain": "nutrition",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 33,
+    "text": "记录体脂率 17.5%",
+    "intent": "manual_entry",
+    "domain": "body",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "体脂"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 34,
+    "text": "录入午餐 米饭 150g 西兰花 100g",
+    "intent": "manual_entry",
+    "domain": "nutrition",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 35,
+    "text": "记录体重72kg",
+    "intent": "manual_entry",
+    "domain": "body",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "无空格"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 36,
+    "text": "添加早餐燕麦 80g",
+    "intent": "manual_entry",
+    "domain": "nutrition",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 37,
+    "text": "记录今天体重 105.9kg",
+    "intent": "manual_entry",
+    "domain": "body",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入",
+      "今天"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 38,
+    "text": "录入 晚餐 豆腐 200g",
+    "intent": "manual_entry",
+    "domain": "nutrition",
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "录入"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 39,
+    "text": "今天不练了，改成休息",
+    "intent": "plan_adjust",
+    "domain": "fitness",
+    "needs_db": true,
+    "expected_tools": [],
+    "tags": [
+      "计划调整"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 40,
+    "text": "调整训练计划，明天练胸",
+    "intent": "plan_adjust",
+    "domain": "fitness",
+    "needs_db": true,
+    "expected_tools": [],
+    "tags": [
+      "计划调整"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 41,
+    "text": "取消今天的训练",
+    "intent": "plan_adjust",
+    "domain": "fitness",
+    "needs_db": true,
+    "expected_tools": [],
+    "tags": [
+      "取消训练"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 42,
+    "text": "改成休息日",
+    "intent": "plan_adjust",
+    "domain": "fitness",
+    "needs_db": true,
+    "expected_tools": [],
+    "tags": [
+      "休息"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 43,
+    "text": "调整计划：本周少练一次",
+    "intent": "plan_adjust",
+    "domain": "fitness",
+    "needs_db": true,
+    "expected_tools": [],
+    "tags": [
+      "计划调整"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 44,
+    "text": "今天训练取消改成恢复",
+    "intent": "plan_adjust",
+    "domain": "fitness",
+    "needs_db": true,
+    "expected_tools": [],
+    "tags": [
+      "恢复"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 45,
+    "text": "把明天的训练改成有氧",
+    "intent": "plan_adjust",
+    "domain": "fitness",
+    "needs_db": true,
+    "expected_tools": [],
+    "tags": [
+      "有氧"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 46,
+    "text": "调整健身计划，降低容量",
+    "intent": "plan_adjust",
+    "domain": "fitness",
+    "needs_db": true,
+    "expected_tools": [],
+    "tags": [
+      "计划调整"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 47,
+    "text": "取消今晚的训练课",
+    "intent": "plan_adjust",
+    "domain": "fitness",
+    "needs_db": true,
+    "expected_tools": [],
+    "tags": [
+      "取消"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 48,
+    "text": "改成 active recovery 今天",
+    "intent": "plan_adjust",
+    "domain": "fitness",
+    "needs_db": true,
+    "expected_tools": [],
+    "tags": [
+      "恢复"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 49,
+    "text": "近30天体脂变化趋势",
+    "intent": "trend_analysis",
+    "domain": null,
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "趋势",
+      "30天"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 50,
+    "text": "近7天体重变化怎么样",
+    "intent": "trend_analysis",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "趋势",
+      "7天"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 51,
+    "text": "近14天蛋白质摄入趋势",
+    "intent": "trend_analysis",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "趋势"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 52,
+    "text": "对比近一个月训练和体重",
+    "intent": "trend_analysis",
+    "domain": null,
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "对比",
+      "跨域"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 53,
+    "text": "近90天体重走势",
+    "intent": "trend_analysis",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "趋势",
+      "90天"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 54,
+    "text": "最近训练量变化",
+    "intent": "trend_analysis",
+    "domain": "training",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "训练量"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 55,
+    "text": "近30天热量摄入变化",
+    "intent": "trend_analysis",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "热量趋势"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 56,
+    "text": "体重和体脂近两周对比",
+    "intent": "trend_analysis",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "对比"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 57,
+    "text": "近7天训练频率趋势",
+    "intent": "trend_analysis",
+    "domain": "training",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "频率"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 58,
+    "text": "分析近30天饮食变化",
+    "intent": "trend_analysis",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "饮食趋势"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 59,
+    "text": "近60天卧推重量变化",
+    "intent": "trend_analysis",
+    "domain": "training",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "动作趋势"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 60,
+    "text": "近21天围度变化",
+    "intent": "trend_analysis",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "围度"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 61,
+    "text": "对比近7天摄入和消耗",
+    "intent": "trend_analysis",
+    "domain": "nutrition",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "对比"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 62,
+    "text": "近10天睡眠和训练关系",
+    "intent": "trend_analysis",
+    "domain": "training",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics",
+      "query_nutrition_logs",
+      "query_training_logs"
+    ],
+    "tags": [
+      "跨域",
+      "边界"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 63,
+    "text": "目标体重设为70kg",
+    "intent": "goal_setting",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "目标",
+      "体重"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 64,
+    "text": "我要在12周降到65公斤",
+    "intent": "goal_setting",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "目标",
+      "减重"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 65,
+    "text": "设定体脂目标15%",
+    "intent": "goal_setting",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "目标",
+      "体脂"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 66,
+    "text": "目标增到75kg",
+    "intent": "goal_setting",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "目标",
+      "增重"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 67,
+    "text": "减到68公斤需要多久",
+    "intent": "goal_setting",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "目标"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 68,
+    "text": "把目标体重改成72kg",
+    "intent": "goal_setting",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "目标修改"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 69,
+    "text": "设定3个月降到80kg",
+    "intent": "goal_setting",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "目标",
+      "期限"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 70,
+    "text": "目标体脂降到12%",
+    "intent": "goal_setting",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "目标"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 71,
+    "text": "我想增肌到78kg",
+    "intent": "goal_setting",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "增肌目标"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 72,
+    "text": "降到70kg以下",
+    "intent": "goal_setting",
+    "domain": "body",
+    "needs_db": true,
+    "expected_tools": [
+      "query_body_metrics"
+    ],
+    "tags": [
+      "目标"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 73,
+    "text": "同步最近7天训记数据",
+    "intent": "sync_trigger",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "同步"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 74,
+    "text": "拉取训记训练记录",
+    "intent": "sync_trigger",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "同步",
+      "训练"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 75,
+    "text": "更新训记数据",
+    "intent": "sync_trigger",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "同步"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 76,
+    "text": "同步最近30天数据",
+    "intent": "sync_trigger",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "同步",
+      "30天"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 77,
+    "text": "从训记同步饮食",
+    "intent": "sync_trigger",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "同步",
+      "饮食"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 78,
+    "text": "拉取最近14天训记",
+    "intent": "sync_trigger",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "同步"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 79,
+    "text": "同步训记身体数据",
+    "intent": "sync_trigger",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "同步",
+      "身体"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 80,
+    "text": "更新最近7天训记同步",
+    "intent": "sync_trigger",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "同步"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 81,
+    "text": "你好",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "寒暄"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 82,
+    "text": "谢谢",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "寒暄"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 83,
+    "text": "你能做什么",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "能力询问"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 84,
+    "text": "怎么用",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "帮助"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 85,
+    "text": "早上好",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "寒暄"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 86,
+    "text": "OK",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "简短"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 87,
+    "text": "明白了",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "反馈"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 88,
+    "text": "这个功能不错",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "反馈"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 89,
+    "text": "再见",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "寒暄"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 90,
+    "text": "帮助",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "帮助"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 91,
+    "text": "介绍一下你自己",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "能力询问"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 92,
+    "text": "说点什么",
+    "intent": "general",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "开放"
+    ],
+    "notes": ""
+  },
+  {
+    "id": 93,
+    "text": "确认",
+    "intent": "confirmation_response",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "确认写入"
+    ],
+    "notes": "需 pending_confirmation 上下文"
+  },
+  {
+    "id": 94,
+    "text": "确定",
+    "intent": "confirmation_response",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "确认写入"
+    ],
+    "notes": "需 pending_confirmation 上下文"
+  },
+  {
+    "id": 95,
+    "text": "是的，写入",
+    "intent": "confirmation_response",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "确认写入"
+    ],
+    "notes": "需 pending_confirmation 上下文"
+  },
+  {
+    "id": 96,
+    "text": "取消",
+    "intent": "confirmation_response",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "取消写入"
+    ],
+    "notes": "需 pending_confirmation 上下文"
+  },
+  {
+    "id": 97,
+    "text": "不要了",
+    "intent": "confirmation_response",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "取消写入"
+    ],
+    "notes": "需 pending_confirmation 上下文"
+  },
+  {
+    "id": 98,
+    "text": "算了",
+    "intent": "confirmation_response",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "取消写入"
+    ],
+    "notes": "需 pending_confirmation 上下文"
+  },
+  {
+    "id": 99,
+    "text": "ok",
+    "intent": "confirmation_response",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "确认"
+    ],
+    "notes": "需 pending_confirmation 上下文"
+  },
+  {
+    "id": 100,
+    "text": "yes",
+    "intent": "confirmation_response",
+    "domain": null,
+    "needs_db": false,
+    "expected_tools": [],
+    "tags": [
+      "确认"
+    ],
+    "notes": "需 pending_confirmation 上下文"
+  }
+]
