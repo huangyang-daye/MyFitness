@@ -23,6 +23,8 @@ class Intent(StrEnum):
     TREND_ANALYSIS = "trend_analysis"
     GOAL_SETTING = "goal_setting"
     SYNC_TRIGGER = "sync_trigger"
+    SCHEDULE_MANAGE = "schedule_manage"
+    REPORT_TRIGGER = "report_trigger"
     GENERAL = "general"
     CONFIRMATION_RESPONSE = "confirmation_response"
 
@@ -50,11 +52,11 @@ class ContextSnapshot(BaseModel):
 
 
 class PendingConfirmation(BaseModel):
-    action_type: str  # db_write | xunji_write | plan_update
+    action_type: str  # db_write | xunji_write | plan_update | schedule_upsert | schedule_cancel
     summary: str
     payload: dict[str, Any]
     expires_at: datetime
-    domain: str | None = None  # body | nutrition
+    domain: str | None = None  # body | nutrition | schedule
 
 
 class GraphMetadata(BaseModel):

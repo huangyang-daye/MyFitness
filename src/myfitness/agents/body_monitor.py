@@ -73,10 +73,11 @@ def _current_metrics_from_context(context: ContextSnapshot, summary: dict) -> Cu
     if body_query and body_query.get("records"):
         latest_weight = None
         latest_bodyfat = None
+        # records 按 record_date desc 排序，取每种指标的第一条即为最新
         for r in body_query["records"]:
-            if r["metric_type"] == "weight":
+            if r["metric_type"] == "weight" and latest_weight is None:
                 latest_weight = r["value"]
-            elif r["metric_type"] == "bodyfat":
+            elif r["metric_type"] == "bodyfat" and latest_bodyfat is None:
                 latest_bodyfat = r["value"]
         return CurrentMetrics(weight_kg=latest_weight, bodyfat_pct=latest_bodyfat)
 

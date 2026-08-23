@@ -8,6 +8,10 @@ from datetime import date, timedelta
 
 from myfitness.schemas.state import Intent
 
+_RECENT_DAYS_RE = re.compile(r"最?\s*近\s*(\d+)\s*天")
+_ISO_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+_CN_MD_RE = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日?")
+_DOT_MD_RE = re.compile(r"(?<!\d)(\d{1,2})[./](\d{1,2})(?!\d)")
 BODY_KEYWORDS = ("体重", "体脂", "围度", "公斤", "kg")
 NUTRITION_KEYWORDS = ("蛋白", "热量", "饮食", "吃了", "吃", "餐", "kcal", "卡路里", "碳水", "脂肪", "营养")
 TRAINING_KEYWORDS = ("训练", "练", "卧推", "深蹲", "硬拉", "动作", "组", "健身")
@@ -66,33 +70,65 @@ def build_query_plan(
 def _has_data_keywords(message: str) -> bool:
     keywords = BODY_KEYWORDS + NUTRITION_KEYWORDS + TRAINING_KEYWORDS
     return any(k in message for k in keywords) or bool(
-        re.search(r"(多少|查询|昨天|今天|前天|近\s*\d+\s*天|\d{4}-\d{2}-\d{2})", message)
+        _RECENT_DAYS_RE.search(message)
+        or re.search(r"(多少|查询|昨天|今天|前天|\d{4}-\d{2}-\d{2})", message)
     )
 
 
-def _parse_date_range(message: str, today: date, intent: Intent) -> tuple[date, date]:
-    if m := re.search(r"近\s*(\d+)\s*天", message):
-        days = int(m.group(1))
-        return today - timedelta(days=days - 1), today - timedelta(days=1)
+def parse_single_date(
+    message: str,
+    today: date | None = None,
+    *,
+    default: date | None = None,
+) -> date | None:
+    """从用户消息解析单个日期（日报、录入等）。"""
+    today = today or date.today()
 
-    if "昨天" in message:
-        d = today - timedelta(days=1)
-        return d, d
-    if "前天" in message:
-        d = today - timedelta(days=2)
-        return d, d
     if "今天" in message:
-        return today, today
+        return today
+    if "昨天" in message:
+        return today - timedelta(days=1)
+    if "前天" in message:
+        return today - timedelta(days=2)
 
-    if m := re.search(r"(\d{4}-\d{2}-\d{2})", message):
-        d = date.fromisoformat(m.group(1))
-        return d, d
+    if m := _ISO_DATE_RE.search(message):
+        return date.fromisoformat(m.group(1))
+
+    if m := _CN_MD_RE.search(message):
+        return _resolve_month_day(int(m.group(1)), int(m.group(2)), today)
+
+    if m := _DOT_MD_RE.search(message):
+        return _resolve_month_day(int(m.group(1)), int(m.group(2)), today)
+
+    return default
+
+
+def _resolve_month_day(month: int, day: int, today: date) -> date:
+    year = today.year
+    try:
+        candidate = date(year, month, day)
+    except ValueError as exc:
+        raise ValueError(f"无效日期：{month}月{day}日") from exc
+    if candidate > today:
+        candidate = date(year - 1, month, day)
+    return candidate
+
+
+def _parse_date_range(message: str, today: date, intent: Intent) -> tuple[date, date]:
+    if m := _RECENT_DAYS_RE.search(message):
+        days = int(m.group(1))
+        # 含今天：近 7 天 = today-6 … today
+        return today - timedelta(days=days - 1), today
+
+    single = parse_single_date(message, today)
+    if single is not None:
+        return single, single
 
     if intent == Intent.TREND_ANALYSIS:
-        return today - timedelta(days=29), today - timedelta(days=1)
+        return today - timedelta(days=29), today
 
-    # 默认查最近 7 天
-    return today - timedelta(days=6), today - timedelta(days=1)
+    # 默认查最近 7 天（含今天）
+    return today - timedelta(days=6), today
 
 
 def _infer_domains(message: str, intent: Intent, domain: str | None) -> tuple[str, ...]:

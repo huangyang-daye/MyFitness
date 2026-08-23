@@ -58,6 +58,18 @@ def _is_confirmation_response(text: str) -> bool:
 
 
 def _keyword_classify(text: str) -> RouteResult | None:
+    if (
+        any(k in text for k in ("日报", "晨报"))
+        or re.search(r"生成.*(?:日报|报告|晨报)", text)
+    ) and not any(k in text for k in ("定时", "每天", "每日", "自动")):
+        return RouteResult(Intent.REPORT_TRIGGER)
+
+    if any(k in text for k in ("定时任务", "查看定时", "取消定时", "停用定时")) or (
+        any(k in text for k in ("定时", "每天", "每日"))
+        and any(k in text for k in ("日报", "同步", "任务"))
+    ):
+        return RouteResult(Intent.SCHEDULE_MANAGE)
+
     if re.search(r"(同步|拉取|更新).*(训记|数据)", text):
         return RouteResult(Intent.SYNC_TRIGGER)
 
@@ -71,18 +83,31 @@ def _keyword_classify(text: str) -> RouteResult | None:
     if re.search(r"(改成|调整|取消).*(训练|计划|休息)", text):
         return RouteResult(Intent.PLAN_ADJUST, domain="fitness")
 
-    if re.search(r"(近\s*\d+\s*天|趋势|变化|对比)", text):
+    if re.search(r"(最?\s*近\s*\d+\s*天|近\s*\d+\s*天|趋势|变化|对比)", text):
         return RouteResult(Intent.TREND_ANALYSIS)
+
+    if re.search(r"(最?\s*近\s*\d+\s*天|近\s*\d+\s*天).*(蛋白|热量|体重|训练|吃)", text):
+        return RouteResult(Intent.DATA_QUERY, domain=_infer_domain_from_text(text))
 
     if re.search(r"(目标|降到|增到|减到).*(kg|公斤|%)", text, re.I):
         return RouteResult(Intent.GOAL_SETTING, domain="body")
 
     if re.search(r"(多少|查询|昨天|今天).*(蛋白|热量|体重|训练|吃)", text):
-        return RouteResult(Intent.DATA_QUERY)
+        return RouteResult(Intent.DATA_QUERY, domain=_infer_domain_from_text(text))
 
     if re.search(r"(多少|查询|昨天|今天)", text):
         return RouteResult(Intent.DATA_QUERY)
 
+    return None
+
+
+def _infer_domain_from_text(text: str) -> str | None:
+    if any(k in text for k in ("体重", "体脂", "围度", "公斤", "kg")):
+        return "body"
+    if any(k in text for k in ("蛋白", "热量", "饮食", "吃了", "餐", "卡路里", "碳水")):
+        return "nutrition"
+    if any(k in text for k in ("训练", "练", "卧推", "深蹲", "硬拉", "健身")):
+        return "fitness"
     return None
 
 
@@ -105,7 +130,7 @@ def _llm_classify(text: str) -> RouteResult | None:
         llm = get_llm()
         prompt = (
             "你是意图分类器。根据用户消息返回 JSON："
-            '{"intent":"data_query|manual_entry|plan_adjust|trend_analysis|goal_setting|sync_trigger|general",'
+            '{"intent":"data_query|manual_entry|plan_adjust|trend_analysis|goal_setting|sync_trigger|schedule_manage|report_trigger|general",'
             '"domain":"body|nutrition|fitness|null"}'
         )
         resp = llm.invoke(
@@ -139,6 +164,8 @@ def agents_for_intent(intent: Intent, domain: str | None = None) -> list[str]:
         Intent.TREND_ANALYSIS: ["body", "nutrition", "fitness"],
         Intent.GOAL_SETTING: ["body"],
         Intent.SYNC_TRIGGER: [],
+        Intent.SCHEDULE_MANAGE: [],
+        Intent.REPORT_TRIGGER: [],
         Intent.GENERAL: [],
         Intent.CONFIRMATION_RESPONSE: [],
     }

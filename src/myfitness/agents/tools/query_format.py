@@ -65,6 +65,54 @@ def _format_nutrition(data: dict) -> str:
     return "\n".join(lines)
 
 
+def format_training_sessions_detail(sessions: list[dict]) -> str:
+    """格式化训练会话明细（日报 / 摘要用）。"""
+    if not sessions:
+        return "报告日无训练记录。"
+
+    lines: list[str] = []
+    for s in sessions:
+        title = s.get("title") or "训练"
+        header = f"**{title}**"
+        extras: list[str] = []
+        if s.get("duration_minutes"):
+            extras.append(f"时长 {s['duration_minutes']} min")
+        if s.get("calories"):
+            extras.append(f"消耗 {s['calories']} kcal")
+        if s.get("total_volume_kg"):
+            extras.append(f"总容量 {s['total_volume_kg']} kg")
+        if s.get("total_sets"):
+            extras.append(f"{s['total_sets']} 组")
+        if extras:
+            header += f"（{'，'.join(extras)}）"
+        lines.append(header)
+
+        movements = s.get("movements") or []
+        if not movements:
+            lines.append("- 无动作明细")
+            continue
+
+        for m in movements:
+            name = m.get("name") or m.get("movement_name") or "未知动作"
+            muscle = f"[{m['muscle_type']}]" if m.get("muscle_type") else ""
+            if m.get("sets") and isinstance(m["sets"], list) and m["sets"]:
+                first = m["sets"][0]
+                if isinstance(first, dict) and ("reps" in first or "reps_display" in first):
+                    sets_text = format_movement_sets(m)
+                    set_count = m.get("done_set_count") or m.get("set_count") or len(m["sets"])
+                else:
+                    set_count = m.get("set_count") or len(m["sets"])
+                    sets_text = "（明细未解析）"
+            else:
+                set_count = m.get("set_count") or 0
+                sets_text = "（无组次）"
+            lines.append(f"- {name}{muscle}：{set_count} 组 — {sets_text}")
+
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
 def _format_training(data: dict) -> str:
     lines = [
         f"【数据库·训练数据】{data['start_date']} ~ {data['end_date']}，共 {data['count']} 次"

@@ -19,6 +19,7 @@ def get_engine():
             settings.database_url,
             pool_pre_ping=True,
             pool_recycle=3600,
+            connect_args={"connect_timeout": settings.db_connect_timeout},
         )
     return _engine
 

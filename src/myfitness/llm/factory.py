@@ -16,10 +16,28 @@ logger = logging.getLogger(__name__)
 RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 MAX_RETRIES = 2
 RETRY_BACKOFF_SECONDS = 0.5
+WARMUP_PROBE_TIMEOUT = 15
+WARMUP_PROBE_PROMPT = "OK"
 
 
 class LlmUnavailableError(RuntimeError):
     """LLM 在重试后仍不可用。"""
+
+
+@dataclass(frozen=True)
+class LlmWarmupResult:
+    """chat 启动预热结果。"""
+
+    configured: bool
+    loaded: bool
+    model: str | None = None
+    connected: bool | None = None
+    error: str | None = None
+
+    @property
+    def ready_for_input(self) -> bool:
+        """未配置 LLM 或客户端已加载完成，即可接受用户输入。"""
+        return not self.configured or self.loaded
 
 
 @dataclass(frozen=True)
@@ -97,6 +115,67 @@ def get_llm():
         cfg.masked_api_key(),
     )
     return ChatOpenAI(**kwargs)
+
+
+def warmup_llm(
+    settings: Settings | None = None,
+    *,
+    probe: bool = True,
+) -> LlmWarmupResult:
+    """预加载 LangChain LLM 客户端；可选快速连通性探测。
+
+    chat 启动时调用，避免首条消息才触发 langchain 导入与实例化。
+    """
+    s = settings or get_settings()
+    if not is_llm_configured(s):
+        return LlmWarmupResult(configured=False, loaded=True)
+
+    model: str | None = None
+    try:
+        cfg = get_llm_config(s)
+        model = cfg.model
+        get_llm()
+    except Exception as exc:
+        logger.warning("LLM 预热加载失败: %s", exc)
+        return LlmWarmupResult(
+            configured=True,
+            loaded=False,
+            model=model,
+            error=str(exc),
+        )
+
+    connected: bool | None = None
+    if probe:
+        try:
+            _probe_quick(cfg, timeout=min(WARMUP_PROBE_TIMEOUT, cfg.timeout))
+            connected = True
+        except Exception as exc:
+            logger.warning("LLM 预热探测失败: %s", exc)
+            connected = False
+
+    return LlmWarmupResult(
+        configured=True,
+        loaded=True,
+        model=model,
+        connected=connected,
+    )
+
+
+def _probe_quick(cfg: LlmConfig, timeout: int) -> None:
+    """启动预热用的轻量连通性探测（短超时、极少 token）。"""
+    payload: dict[str, Any] = {
+        "model": cfg.model,
+        "messages": [{"role": "user", "content": WARMUP_PROBE_PROMPT}],
+        "temperature": 0,
+        "max_tokens": 5,
+    }
+    headers = {
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+    }
+    with httpx.Client(timeout=float(timeout)) as client:
+        response = client.post(cfg.chat_completions_url, headers=headers, json=payload)
+        response.raise_for_status()
 
 
 def probe_llm_connection(

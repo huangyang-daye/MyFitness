@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from myfitness.agents.tools.query_planner import build_query_plan
+from myfitness.agents.tools.query_planner import build_query_plan, parse_single_date
 from myfitness.agents.tools.query_tools import query_body_metrics, query_nutrition_logs
 from myfitness.db.models import Base, BodyMetric, NutritionLog, User
 from myfitness.db.repositories.metrics import SOURCE_MANUAL
@@ -29,7 +29,44 @@ def test_build_query_plan_yesterday_protein(db_session):
     plan = build_query_plan("昨天吃了多少蛋白质？", Intent.DATA_QUERY, today=date(2026, 8, 22))
     assert plan is not None
     assert plan.start_date == date(2026, 8, 21)
+    assert plan.end_date == date(2026, 8, 21)
     assert "nutrition" in plan.domains
+
+
+def test_parse_single_date_variants():
+    today = date(2026, 8, 23)
+    assert parse_single_date("生成今天日报", today) == today
+    assert parse_single_date("生成昨天日报", today) == date(2026, 8, 22)
+    assert parse_single_date("生成8.21的报告", today) == date(2026, 8, 21)
+    assert parse_single_date("生成8月20日日报", today) == date(2026, 8, 20)
+    assert parse_single_date("生成2026-08-19日报", today) == date(2026, 8, 19)
+    assert parse_single_date("生成日报", today, default=date(2026, 8, 22)) == date(2026, 8, 22)
+
+
+def test_build_query_plan_recent_7_days_includes_today():
+    today = date(2026, 8, 23)
+    plan = build_query_plan("最近7天的体重", Intent.DATA_QUERY, today=today)
+    assert plan is not None
+    assert plan.start_date == date(2026, 8, 17)
+    assert plan.end_date == today
+    assert plan.domains == ("body",)
+    assert plan.metric_type == "weight"
+
+
+def test_build_query_plan_default_range_includes_today():
+    today = date(2026, 8, 23)
+    plan = build_query_plan("体重多少", Intent.DATA_QUERY, today=today)
+    assert plan is not None
+    assert plan.end_date == today
+    assert plan.lookback_days == 7
+
+
+def test_build_query_plan_trend_analysis_includes_today():
+    today = date(2026, 8, 23)
+    plan = build_query_plan("近30天体脂变化趋势", Intent.TREND_ANALYSIS, today=today)
+    assert plan is not None
+    assert plan.start_date == date(2026, 7, 25)
+    assert plan.end_date == today
 
 
 def test_query_nutrition_logs(db_session):

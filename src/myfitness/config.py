@@ -1,4 +1,6 @@
 from functools import lru_cache
+import re
+import sys
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,7 +13,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = "postgresql+psycopg://postgres:123456@localhost:5432/myfitness"
+    database_url: str = "postgresql+psycopg://postgres:123456@127.0.0.1:5432/myfitness"
+    db_connect_timeout: int = 5
 
     xunji_body_api_key: str = ""
     xunji_food_api_key: str = ""
@@ -39,6 +42,22 @@ class Settings(BaseSettings):
 
     sync_default_days: int = 90
     xunji_cache_ttl_seconds: int = 300
+
+    @field_validator("database_url")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        value = value.strip()
+        # Windows：localhost 常先解析 IPv6(::1)，而本地 PG 多仅监听 127.0.0.1，导致 2min+ 连接等待
+        if sys.platform == "win32":
+            value = re.sub(r"@localhost(?=[:/])", "@127.0.0.1", value)
+        return value
+
+    @field_validator("db_connect_timeout", mode="before")
+    @classmethod
+    def parse_db_connect_timeout(cls, value: object) -> object:
+        if value == "" or value is None:
+            return 5
+        return value
 
     @field_validator("llm_base_url")
     @classmethod

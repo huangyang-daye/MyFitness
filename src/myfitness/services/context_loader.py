@@ -23,6 +23,7 @@ def load_context_snapshot(
     user_id: int,
     end_date: date | None = None,
     lookback_days: int = 7,
+    query_results: dict[str, dict] | None = None,
 ) -> ContextSnapshot:
     end = end_date or date.today()
     start = end - timedelta(days=lookback_days - 1)
@@ -32,13 +33,24 @@ def load_context_snapshot(
     training_repo = TrainingLogRepository(session, user_id)
     goal_repo = UserGoalRepository(session, user_id)
 
-    body_records = body_repo.query_range(start, end)
-    nutrition_records = nutrition_repo.query_range(start, end)
-    training_records = training_repo.query_range(start, end)
+    qr = query_results or {}
+    if "body" in qr:
+        body_summary = _summarize_body_from_query(qr["body"])
+    else:
+        body_records = body_repo.query_range(start, end)
+        body_summary = _summarize_body(body_repo, body_records, start, end)
 
-    body_summary = _summarize_body(body_repo, body_records, start, end)
-    nutrition_summary = _summarize_nutrition(nutrition_repo, nutrition_records, start, end)
-    training_summary = _summarize_training(training_records, start, end)
+    if "nutrition" in qr:
+        nutrition_summary = _summarize_nutrition_from_query(qr["nutrition"], nutrition_repo, end)
+    else:
+        nutrition_records = nutrition_repo.query_range(start, end)
+        nutrition_summary = _summarize_nutrition(nutrition_repo, nutrition_records, start, end)
+
+    if "training" in qr:
+        training_summary = _summarize_training_from_query(qr["training"])
+    else:
+        training_records = training_repo.query_range(start, end)
+        training_summary = _summarize_training(training_records, start, end)
 
     goals = [
         {
@@ -120,6 +132,75 @@ def _summarize_body(
         "latest_bodyfat_pct": latest_bodyfat,
         "weight_change_kg": weight_change,
         "by_date": dict(by_date),
+    }
+
+
+def _summarize_body_from_query(data: dict) -> dict:
+    by_date: dict[str, dict[str, float]] = defaultdict(dict)
+    weights: list[tuple[str, float]] = []
+    bodyfats: list[tuple[str, float]] = []
+    for r in data.get("records", []):
+        d = r["date"]
+        by_date[d][r["metric_type"]] = float(r["value"])
+        if r["metric_type"] == "weight":
+            weights.append((d, float(r["value"])))
+        elif r["metric_type"] == "bodyfat":
+            bodyfats.append((d, float(r["value"])))
+    weights.sort(key=lambda x: x[0])
+    bodyfats.sort(key=lambda x: x[0])
+    return {
+        "record_count": data.get("count", len(data.get("records", []))),
+        "days_with_data": len(by_date),
+        "latest_weight_kg": weights[-1][1] if weights else None,
+        "latest_bodyfat_pct": bodyfats[-1][1] if bodyfats else None,
+        "weight_change_kg": (weights[-1][1] - weights[0][1]) if len(weights) >= 2 else None,
+        "by_date": dict(by_date),
+    }
+
+
+def _summarize_nutrition_from_query(
+    data: dict,
+    repo: NutritionLogRepository,
+    end: date,
+) -> dict:
+    _ = repo  # 保留签名，便于日后 fallback
+    by_date = {
+        d: {
+            "calories": float(v.get("calories", 0)),
+            "protein_g": float(v.get("protein_g", 0)),
+            "carbs_g": float(v.get("carbs_g", 0)),
+            "fat_g": float(v.get("fat_g", 0)),
+        }
+        for d, v in (data.get("daily_totals") or {}).items()
+    }
+    today = end.isoformat()
+    empty = {"calories": 0.0, "protein_g": 0.0, "carbs_g": 0.0, "fat_g": 0.0}
+    today_totals = by_date.get(today, empty)
+    return {
+        "record_count": data.get("count", 0),
+        "days_with_logs": len(by_date),
+        "today_totals": today_totals,
+        "by_date": by_date,
+    }
+
+
+def _summarize_training_from_query(data: dict) -> dict:
+    movements: set[str] = set()
+    dates: list[str] = []
+    total_volume = 0.0
+    for s in data.get("sessions", []):
+        dates.append(s["date"])
+        if s.get("total_volume_kg"):
+            total_volume += float(s["total_volume_kg"])
+        for m in s.get("movements") or []:
+            name = m.get("name") if isinstance(m, dict) else None
+            if name:
+                movements.add(name)
+    return {
+        "sessions": data.get("count", len(data.get("sessions", []))),
+        "movements": sorted(movements),
+        "dates": sorted(set(dates)),
+        "total_volume_kg": round(total_volume, 1),
     }
 
 

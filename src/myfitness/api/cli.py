@@ -10,10 +10,18 @@ from rich.console import Console
 from rich.table import Table
 
 from myfitness.config import get_settings
+from myfitness.db.repositories.reports import DailyReportRepository, ScheduledTaskRepository
 from myfitness.db.session import get_or_create_default_user, session_scope
 from myfitness.graph.chat import finalize_streamed_reply, iter_chat_turn, new_chat_state, run_chat_turn
-from myfitness.llm.factory import get_llm_config, is_llm_configured, probe_llm_connection
+from myfitness.llm.factory import (
+    LlmWarmupResult,
+    get_llm_config,
+    is_llm_configured,
+    probe_llm_connection,
+    warmup_llm,
+)
 from myfitness.llm.guard import get_llm_guard
+from myfitness.services.daily_report import run_daily_report
 from myfitness.sync.orchestrator import run_sync
 from myfitness.xunji.keys import get_key_statuses, missing_keys_for_sync
 
@@ -21,9 +29,13 @@ app = typer.Typer(help="MyFitness — 多 Agent 健康监控 CLI")
 db_app = typer.Typer(help="数据库管理")
 llm_app = typer.Typer(help="LLM 配置与测试")
 xunji_app = typer.Typer(help="训记 Open API 配置")
+report_app = typer.Typer(help="健康日报")
+scheduler_app = typer.Typer(help="定时任务调度")
 app.add_typer(db_app, name="db")
 app.add_typer(llm_app, name="llm")
 app.add_typer(xunji_app, name="xunji")
+app.add_typer(report_app, name="report")
+app.add_typer(scheduler_app, name="scheduler")
 
 console = Console()
 
@@ -154,6 +166,129 @@ def xunji_keys() -> None:
         console.print("\n[green]同步所需鉴权已就绪（Skill 文档或 .env）。[/green]")
 
 
+@report_app.command("generate")
+def report_generate(
+    report_date: Optional[str] = typer.Option(None, "--date", help="报告日期 YYYY-MM-DD，默认昨天"),
+    no_sync: bool = typer.Option(False, "--no-sync", help="跳过训记同步"),
+) -> None:
+    """立即生成健康日报。"""
+    settings = get_settings()
+    d = date.fromisoformat(report_date) if report_date else None
+    with session_scope() as session:
+        get_or_create_default_user(session, settings.default_user_id)
+        with console.status("[bold cyan]正在生成日报…[/bold cyan]", spinner="dots"):
+            result = run_daily_report(
+                session,
+                settings.default_user_id,
+                report_date=d,
+                sync_first=not no_sync,
+            )
+    console.print(f"[green]日报已生成[/green]：{result['report_date']}")
+    if result.get("file_path"):
+        console.print(f"文件：{result['file_path']}")
+    console.print(result["content_md"][:1500])
+    if len(result["content_md"]) > 1500:
+        console.print("\n…（已截断）")
+
+
+@report_app.command("list")
+def report_list(
+    limit: int = typer.Option(7, help="最近 N 份"),
+) -> None:
+    """列出已保存的日报。"""
+    settings = get_settings()
+    with session_scope() as session:
+        rows = DailyReportRepository(session, settings.default_user_id).list_recent(limit)
+    table = Table(title="日报列表")
+    table.add_column("日期")
+    table.add_column("长度")
+    table.add_column("生成时间")
+    for r in rows:
+        table.add_row(
+            r.report_date.isoformat(),
+            str(len(r.content_md)),
+            r.created_at.isoformat() if r.created_at else "-",
+        )
+    console.print(table)
+
+
+@scheduler_app.command("run")
+def scheduler_run(
+    foreground: bool = typer.Option(True, "--foreground/--background", help="前台阻塞运行"),
+) -> None:
+    """启动定时任务调度器（从 DB 加载任务；默认种子日报任务）。"""
+    try:
+        from myfitness.scheduler.manager import start_scheduler, stop_scheduler
+    except ImportError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    settings = get_settings()
+    count = start_scheduler(settings.default_user_id)
+    console.print(f"[green]调度器已启动[/green]，已加载 {count} 个任务。Ctrl+C 退出。")
+    if not foreground:
+        console.print("[yellow]后台模式暂未支持，请前台运行。[/yellow]")
+        return
+    try:
+        import time
+
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        stop_scheduler()
+        console.print("\n调度器已停止。")
+
+
+@scheduler_app.command("list")
+def scheduler_list() -> None:
+    """列出已保存的定时任务。"""
+    settings = get_settings()
+    with session_scope() as session:
+        tasks = ScheduledTaskRepository(session, settings.default_user_id).list_all()
+    table = Table(title="定时任务")
+    table.add_column("类型")
+    table.add_column("名称")
+    table.add_column("时间")
+    table.add_column("状态")
+    table.add_column("上次执行")
+    for t in tasks:
+        table.add_row(
+            t.task_type,
+            t.label,
+            t.time_of_day,
+            "启用" if t.enabled else "停用",
+            t.last_run_at.isoformat() if t.last_run_at else "-",
+        )
+    console.print(table)
+
+
+@scheduler_app.command("add")
+def scheduler_add(
+    task_type: str = typer.Argument(..., help="daily_report | sync"),
+    time_of_day: str = typer.Option("07:00", "--time", help="HH:MM"),
+) -> None:
+    """添加或更新定时任务。"""
+    from myfitness.agents.schedule_parser import TASK_LABELS
+    from myfitness.agents.tools.schedule_tools import apply_schedule_upsert
+
+    if task_type not in TASK_LABELS:
+        console.print(f"[red]未知类型：{task_type}，可选：{', '.join(TASK_LABELS)}[/red]")
+        raise typer.Exit(1)
+    settings = get_settings()
+    with session_scope() as session:
+        msg = apply_schedule_upsert(
+            session,
+            settings.default_user_id,
+            {
+                "task_type": task_type,
+                "label": TASK_LABELS[task_type],
+                "time_of_day": time_of_day,
+                "enabled": True,
+            },
+        )
+    console.print(f"[green]{msg}[/green]")
+
+
 @llm_app.command("config")
 def llm_config() -> None:
     """显示当前 LLM 配置（API Key 脱敏）。"""
@@ -221,6 +356,51 @@ def llm_test(
         console.print(f"Token: {result['usage']}")
 
 
+def _run_llm_warmup() -> LlmWarmupResult:
+    """启动 chat 前预加载 LLM，加载完成后再允许用户输入。"""
+    if not is_llm_configured():
+        return warmup_llm()
+
+    with console.status("[bold cyan]正在加载 LLM…[/bold cyan]", spinner="dots"):
+        return warmup_llm()
+
+
+def _warmup_database(user_id: int) -> None:
+    """预热数据库连接，避免首条消息才建立 PostgreSQL 连接。"""
+    try:
+        with console.status("[bold cyan]正在连接数据库…[/bold cyan]", spinner="dots"):
+            with session_scope() as session:
+                get_or_create_default_user(session, user_id)
+    except Exception as exc:
+        settings = get_settings()
+        host = settings.database_url.split("@")[-1] if "@" in settings.database_url else settings.database_url
+        console.print(f"[red]数据库连接失败：{exc}[/red]")
+        console.print(f"[yellow]当前目标：{host}[/yellow]")
+        console.print(
+            "[yellow]Windows 请将 DATABASE_URL 中的 localhost 改为 127.0.0.1，"
+            "并确认 PostgreSQL 已启动。[/yellow]"
+        )
+        raise typer.Exit(1) from exc
+
+
+def _print_warmup_status(result: LlmWarmupResult) -> None:
+    if not result.configured:
+        console.print("[yellow]LLM 未配置，将使用规则模板回复[/yellow]")
+        return
+    if not result.loaded:
+        console.print(f"[red]LLM 加载失败：{result.error}[/red]")
+        console.print("[yellow]将使用规则模板兜底[/yellow]")
+        return
+    model_label = result.model or "unknown"
+    if result.connected is False:
+        console.print(
+            f"[yellow]LLM 已加载（{model_label}），但连通性探测失败，"
+            "首条回复可能降级为规则模板[/yellow]"
+        )
+        return
+    console.print(f"[green]LLM 已就绪[/green]（{model_label}）")
+
+
 @app.command("chat")
 def chat(
     once: bool = typer.Option(False, "--once", help="单轮模式：处理一条消息后退出"),
@@ -229,31 +409,49 @@ def chat(
 ) -> None:
     """启动多 Agent 对话（LangGraph 编排，LLM 流式输出）。"""
     settings = get_settings()
+    warmup = _run_llm_warmup()
+    if not warmup.ready_for_input:
+        console.print("[red]LLM 未能加载，无法启动对话。[/red]")
+        raise typer.Exit(1)
+
+    _print_warmup_status(warmup)
+    _warmup_database(settings.default_user_id)
     state = new_chat_state(user_id=settings.default_user_id)
 
     def _process(text: str) -> None:
         nonlocal state
-        with session_scope() as session:
-            get_or_create_default_user(session, settings.default_user_id)
-            if no_stream:
-                state = run_chat_turn(session, state, text)
-                console.print(f"\n[bold cyan]MyFitness[/bold cyan]\n{state.reply}\n")
-                return
+        progress_log: list[str] = []
 
-            state, chunks = iter_chat_turn(session, state, text)
-            console.print("\n[bold cyan]MyFitness[/bold cyan]")
-            reply_parts: list[str] = []
-            for chunk in chunks:
-                console.print(chunk, end="")
-                reply_parts.append(chunk)
-            console.print("\n")
-            finalize_streamed_reply(state, "".join(reply_parts))
-            snap = get_llm_guard().snapshot()
-            if snap["state"] == "open":
-                console.print(
-                    "[yellow]提示：LLM 已熔断，后续回复将使用规则模板，"
-                    f"约 {60}s 后自动恢复探测。[/yellow]"
-                )
+        def on_progress(msg: str) -> None:
+            progress_log.append(msg)
+            status.update(f"[bold cyan]{msg}[/bold cyan]")
+
+        with console.status("[bold cyan]处理中…[/bold cyan]", spinner="dots") as status:
+            with session_scope() as session:
+                get_or_create_default_user(session, settings.default_user_id)
+                if no_stream:
+                    state = run_chat_turn(session, state, text, on_progress=on_progress)
+                    status.stop()
+                    _print_progress_log(progress_log)
+                    console.print(f"\n[bold cyan]MyFitness[/bold cyan]\n{state.reply}\n")
+                    return
+
+                state, chunks = iter_chat_turn(session, state, text, on_progress=on_progress)
+                status.stop()
+                _print_progress_log(progress_log)
+                console.print("\n[bold cyan]MyFitness[/bold cyan]")
+                reply_parts: list[str] = []
+                for chunk in chunks:
+                    console.print(chunk, end="")
+                    reply_parts.append(chunk)
+                console.print("\n")
+                finalize_streamed_reply(state, "".join(reply_parts))
+                snap = get_llm_guard().snapshot()
+                if snap["state"] == "open":
+                    console.print(
+                        "[yellow]提示：LLM 已熔断，后续回复将使用规则模板，"
+                        f"约 {60}s 后自动恢复探测。[/yellow]"
+                    )
 
     if message:
         _process(message)
@@ -277,6 +475,14 @@ def chat(
             console.print("再见。")
             break
         _process(text)
+
+
+def _print_progress_log(steps: list[str]) -> None:
+    """将本轮 Agent/Tool 调用步骤打印为一行摘要。"""
+    if not steps:
+        return
+    cleaned = [s.rstrip("…").rstrip(".") for s in steps]
+    console.print(f"[dim]› {' → '.join(cleaned)}[/dim]")
 
 
 if __name__ == "__main__":

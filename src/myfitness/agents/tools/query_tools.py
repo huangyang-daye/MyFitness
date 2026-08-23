@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 
 from sqlalchemy.orm import Session
@@ -154,17 +155,23 @@ def execute_query_plan(
     end_date: date,
     metric_type: str | None = None,
     meal_type: str | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, dict]:
     """按查询计划执行一个或多个 domain 的 DB 查询。"""
+    from myfitness.graph.progress import emit, label_for
+
     results: dict[str, dict] = {}
     if "body" in domains:
+        emit(on_progress, f"{label_for('query_body_metrics')}…")
         results["body"] = query_body_metrics(
             session, user_id, start_date, end_date, metric_type=metric_type
         )
     if "nutrition" in domains:
+        emit(on_progress, f"{label_for('query_nutrition_logs')}…")
         results["nutrition"] = query_nutrition_logs(
             session, user_id, start_date, end_date, meal_type=meal_type
         )
     if "training" in domains or "fitness" in domains:
+        emit(on_progress, f"{label_for('query_training_logs')}…")
         results["training"] = query_training_logs(session, user_id, start_date, end_date)
     return results

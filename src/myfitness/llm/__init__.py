@@ -3,10 +3,12 @@
 from myfitness.llm.factory import (
     LlmConfig,
     LlmUnavailableError,
+    LlmWarmupResult,
     get_llm,
     get_llm_config,
     is_llm_configured,
     probe_llm_connection,
+    warmup_llm,
 )
 from myfitness.llm.guard import (
     LlmCallStats,
@@ -21,9 +23,11 @@ __all__ = [
     "LlmConfig",
     "LlmGuard",
     "LlmUnavailableError",
+    "LlmWarmupResult",
     "get_llm",
     "get_llm_config",
     "get_llm_guard",
     "is_llm_configured",
     "probe_llm_connection",
+    "warmup_llm",
 ]
