@@ -217,6 +217,80 @@ def probe_llm_connection(
     }
 
 
+def chat_completion(
+    messages: list[dict[str, str]],
+    settings: Settings | None = None,
+    *,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> str:
+    """非流式 OpenAI 兼容对话补全：限频 → 重试 → 熔断记录。
+
+    供意图识别 Agent 等需要一次性结构化输出的场景使用。
+    """
+    cfg = get_llm_config(settings)
+    guard = get_llm_guard()
+    guard.acquire()
+    try:
+        content = _complete_with_retry(cfg, messages, temperature, max_tokens)
+        guard.record_success()
+        return content
+    except Exception as exc:
+        guard.record_failure(str(exc))
+        raise
+
+
+def _complete_with_retry(
+    cfg: LlmConfig,
+    messages: list[dict[str, str]],
+    temperature: float | None,
+    max_tokens: int | None,
+) -> str:
+    payload: dict[str, Any] = {"model": cfg.model, "messages": messages}
+    if temperature is not None:
+        payload["temperature"] = temperature
+    else:
+        payload["temperature"] = cfg.temperature
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    elif cfg.max_tokens is not None:
+        payload["max_tokens"] = cfg.max_tokens
+
+    headers = {
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+    }
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with httpx.Client(timeout=float(cfg.timeout)) as client:
+                response = client.post(cfg.chat_completions_url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+            choices = data.get("choices") or []
+            if not choices:
+                raise LlmUnavailableError("LLM 返回为空：无 choices")
+            message = choices[0].get("message") or {}
+            content = message.get("content") or ""
+            if not content.strip():
+                raise LlmUnavailableError("LLM 返回内容为空")
+            return content
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            retryable = status in RETRYABLE_STATUS
+            logger.warning("LLM HTTP %s（attempt %d/%d）", status, attempt + 1, MAX_RETRIES + 1)
+            if not retryable or attempt >= MAX_RETRIES:
+                raise LlmUnavailableError(f"LLM 服务不可用: HTTP {status}") from exc
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            logger.warning("LLM 网络异常（attempt %d/%d）: %s", attempt + 1, MAX_RETRIES + 1, exc)
+            if attempt >= MAX_RETRIES:
+                raise LlmUnavailableError(f"LLM 连接失败: {exc}") from exc
+
+        _time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+
+    raise LlmUnavailableError("LLM 调用失败：重试耗尽")
+
+
 def _parse_stream_line(line: str) -> str | None:
     if not line.startswith("data:"):
         return None

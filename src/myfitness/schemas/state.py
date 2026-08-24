@@ -29,6 +29,57 @@ class Intent(StrEnum):
     CONFIRMATION_RESPONSE = "confirmation_response"
 
 
+class RouteResult:
+    """意图识别结果 — 支持一条消息多个意图（按执行顺序）+ 显式日期范围。
+
+    - intents：非空有序意图列表；「同步X并生成日报」→ [SYNC_TRIGGER, REPORT_TRIGGER]
+    - start_date/end_date：消息中明确指出的日期范围（用于同步/日报），未指明时为 None
+    - intent：主意图（intents[0]），保持向后兼容
+    """
+
+    def __init__(
+        self,
+        intents: Intent | list[Intent] | None = None,
+        domain: str | None = None,
+        confirmation_action: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> None:
+        if intents is None:
+            items: list[Intent] = []
+        elif isinstance(intents, Intent):
+            items = [intents]
+        else:
+            items = []
+            for item in intents:
+                if isinstance(item, Intent):
+                    items.append(item)
+                elif isinstance(item, str):
+                    try:
+                        items.append(Intent(item))
+                    except ValueError:
+                        continue
+        # 去重且保持顺序
+        self.intents: list[Intent] = list(dict.fromkeys(items))
+        self.domain = domain  # body | nutrition | fitness
+        self.confirmation_action = confirmation_action  # confirm | cancel
+        self.start_date = start_date
+        self.end_date = end_date
+
+    @property
+    def intent(self) -> Intent:
+        return self.intents[0] if self.intents else Intent.GENERAL
+
+    def has(self, intent: Intent) -> bool:
+        return intent in self.intents
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试辅助
+        return (
+            f"RouteResult(intents={[i.value for i in self.intents]}, domain={self.domain!r}, "
+            f"start={self.start_date}, end={self.end_date})"
+        )
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str

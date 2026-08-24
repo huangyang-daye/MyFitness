@@ -32,7 +32,7 @@ def test_intent_dataset_accuracy(dataset):
     correct = 0
     for item in dataset:
         use_pending = item["intent"] == "confirmation_response"
-        route = classify_intent(item["text"], pending if use_pending else None)
+        route = classify_intent(item["text"], pending if use_pending else None, use_llm=False)
         if route.intent.value == item["intent"]:
             correct += 1
     accuracy = correct / len(dataset)

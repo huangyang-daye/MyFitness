@@ -37,7 +37,7 @@ def test_agents_for_turn_only_body_on_weight_query():
 
 
 def test_classify_recent_weight_as_trend_or_data():
-    result = classify_intent("最近7天的体重")
+    result = classify_intent("最近7天的体重", use_llm=False)
     assert result.intent in {Intent.TREND_ANALYSIS, Intent.DATA_QUERY}
 
 

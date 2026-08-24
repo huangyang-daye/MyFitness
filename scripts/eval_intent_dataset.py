@@ -248,7 +248,7 @@ def evaluate(samples: list[IntentSample]) -> list[EvalResult]:
 
     for s in samples:
         use_pending = s.intent == "confirmation_response"
-        route = classify_intent(s.text, pending if use_pending else None)
+        route = classify_intent(s.text, pending if use_pending else None, use_llm=False)
         pred_intent = route.intent.value
         pred_domain = route.domain
 

@@ -66,10 +66,10 @@ def test_parse_schedule_cancel():
 
 
 def test_classify_schedule_and_report_intents():
-    assert classify_intent("每天早上7点生成日报").intent == Intent.SCHEDULE_MANAGE
-    assert classify_intent("生成昨天日报").intent == Intent.REPORT_TRIGGER
-    assert classify_intent("生成8.21的报告").intent == Intent.REPORT_TRIGGER
-    assert classify_intent("查看定时任务").intent == Intent.SCHEDULE_MANAGE
+    assert classify_intent("每天早上7点生成日报", use_llm=False).intent == Intent.SCHEDULE_MANAGE
+    assert classify_intent("生成昨天日报", use_llm=False).intent == Intent.REPORT_TRIGGER
+    assert classify_intent("生成8.21的报告", use_llm=False).intent == Intent.REPORT_TRIGGER
+    assert classify_intent("查看定时任务", use_llm=False).intent == Intent.SCHEDULE_MANAGE
 
 
 def test_run_daily_report_persists(db_session, tmp_path, monkeypatch):

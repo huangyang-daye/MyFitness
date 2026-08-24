@@ -102,33 +102,44 @@ def prepare_chat_turn(
         return ChatTurnResult(state=state, stream=False)
 
     emit(on_progress, f"{label_for('classify_intent')}…")
-    route = classify_intent(state.user_message, state.pending_confirmation)
+    route = classify_intent(
+        state.user_message,
+        state.pending_confirmation,
+        use_llm=is_llm_configured(),
+    )
     state.intent = route.intent
     state.intent_domain = route.domain
 
-    if route.intent == Intent.CONFIRMATION_RESPONSE and state.pending_confirmation:
+    if route.has(Intent.CONFIRMATION_RESPONSE) and state.pending_confirmation:
         emit(on_progress, f"{label_for('confirmation')}…")
         _handle_confirmation(session, state, route.confirmation_action or "cancel")
         return ChatTurnResult(state=state, stream=False)
 
-    if route.intent == Intent.MANUAL_ENTRY:
+    if route.has(Intent.MANUAL_ENTRY):
         emit(on_progress, f"{label_for('manual_entry')}…")
         _handle_manual_entry(session, state, route.domain or "nutrition")
         return ChatTurnResult(state=state, stream=False)
 
-    if route.intent == Intent.SYNC_TRIGGER:
+    # 组合意图：先同步数据，再基于新数据生成日报
+    if route.has(Intent.SYNC_TRIGGER) and route.has(Intent.REPORT_TRIGGER):
         emit(on_progress, f"{label_for('sync')}…")
-        _handle_sync(session, state)
+        emit(on_progress, f"{label_for('daily_report')}…")
+        _handle_sync_and_report(session, state, route)
         return ChatTurnResult(state=state, stream=False)
 
-    if route.intent == Intent.SCHEDULE_MANAGE:
+    if route.has(Intent.SYNC_TRIGGER):
+        emit(on_progress, f"{label_for('sync')}…")
+        _handle_sync(session, state, route)
+        return ChatTurnResult(state=state, stream=False)
+
+    if route.has(Intent.SCHEDULE_MANAGE):
         emit(on_progress, f"{label_for('schedule')}…")
         _handle_schedule(session, state)
         return ChatTurnResult(state=state, stream=False)
 
-    if route.intent == Intent.REPORT_TRIGGER:
+    if route.has(Intent.REPORT_TRIGGER):
         emit(on_progress, f"{label_for('daily_report')}…")
-        _handle_report(session, state)
+        _handle_report(session, state, route)
         return ChatTurnResult(state=state, stream=False)
 
     plan = build_query_plan(state.user_message, route.intent, route.domain)
@@ -323,9 +334,21 @@ def _handle_confirmation(
     _append_assistant(state)
 
 
-def _handle_sync(session: Session, state: MyFitnessGraphState) -> None:
+def _handle_sync(
+    session: Session,
+    state: MyFitnessGraphState,
+    route: RouteResult | None = None,
+) -> None:
+    """同步训记数据；消息中指明日期时按该范围同步，否则默认最近 7 天。"""
+    start_date = route.start_date if route else None
+    end_date = route.end_date if route else None
     try:
-        result = run_sync(session, state.user_id, days=7)
+        if start_date and end_date:
+            result = run_sync(
+                session, state.user_id, start_date=start_date, end_date=end_date
+            )
+        else:
+            result = run_sync(session, state.user_id, days=7)
         state.reply = (
             f"同步完成：{result['status']}，"
             f"范围 {result['start_date']} ~ {result['end_date']}。"
@@ -333,6 +356,58 @@ def _handle_sync(session: Session, state: MyFitnessGraphState) -> None:
     except Exception as exc:
         state.errors.append(str(exc))
         state.reply = f"同步失败：{exc}"
+    _append_assistant(state)
+
+
+def _handle_sync_and_report(
+    session: Session,
+    state: MyFitnessGraphState,
+    route: RouteResult,
+) -> None:
+    """组合意图：先同步指定日期数据，再基于新数据生成该日日报。"""
+    report_date = route.end_date or route.start_date
+    if report_date is None:
+        report_date = parse_single_date(
+            state.user_message,
+            default=date.today() - timedelta(days=1),
+        )
+        assert report_date is not None
+    sync_start = route.start_date or report_date
+    sync_end = route.end_date or report_date
+
+    parts: list[str] = []
+    try:
+        sync_result = run_sync(
+            session, state.user_id, start_date=sync_start, end_date=sync_end
+        )
+        parts.append(
+            f"同步完成：{sync_result['status']}，"
+            f"范围 {sync_result['start_date']} ~ {sync_result['end_date']}。"
+        )
+    except Exception as exc:
+        state.errors.append(str(exc))
+        parts.append(f"同步失败：{exc}（继续使用已有数据生成日报）")
+
+    try:
+        result = run_daily_report(
+            session,
+            state.user_id,
+            report_date=report_date,
+            sync_first=False,  # 已在上方显式同步
+        )
+        path = result.get("file_path") or "（未写入文件）"
+        parts.append(
+            f"已生成 {result['report_date']} 日报。\n"
+            f"文件：{path}\n\n"
+            f"{result['content_md'][:2000]}"
+        )
+        if len(result["content_md"]) > 2000:
+            parts.append("\n\n…（已截断，完整内容见文件）")
+    except Exception as exc:
+        state.errors.append(str(exc))
+        parts.append(f"生成日报失败：{exc}")
+
+    state.reply = "\n\n".join(parts)
     _append_assistant(state)
 
 
@@ -384,11 +459,19 @@ def _handle_schedule(session: Session, state: MyFitnessGraphState) -> None:
     _append_assistant(state)
 
 
-def _handle_report(session: Session, state: MyFitnessGraphState) -> None:
-    report_date = parse_single_date(
-        state.user_message,
-        default=date.today() - timedelta(days=1),
-    )
+def _handle_report(
+    session: Session,
+    state: MyFitnessGraphState,
+    route: RouteResult | None = None,
+) -> None:
+    report_date: date | None = None
+    if route:
+        report_date = route.end_date or route.start_date
+    if report_date is None:
+        report_date = parse_single_date(
+            state.user_message,
+            default=date.today() - timedelta(days=1),
+        )
     assert report_date is not None
     try:
         result = run_daily_report(
