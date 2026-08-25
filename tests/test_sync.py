@@ -5,8 +5,13 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from myfitness.db.models import Base, BodyMetric
-from myfitness.db.repositories.metrics import BodyMetricRepository, SOURCE_MANUAL, SOURCE_XUNJI
+from myfitness.db.models import Base, BodyMetric, NutritionLog
+from myfitness.db.repositories.metrics import (
+    BodyMetricRepository,
+    NutritionLogRepository,
+    SOURCE_MANUAL,
+    SOURCE_XUNJI,
+)
 from myfitness.sync.body_sync import sync_body_metrics
 from myfitness.xunji.client import XunjiClient
 from myfitness.xunji.common import mask_api_key
@@ -103,6 +108,72 @@ def test_iter_food_entries_days_shape():
     entries = list(iter_food_entries(payload))
     assert len(entries) == 1
     assert entries[0]["food_name"] == "鸡胸肉"
+
+
+def test_iter_food_entries_xunji_foods_records_shape():
+    payload = {
+        "days": [
+            {
+                "date": "2026-08-25",
+                "foods": {
+                    "records": [
+                        {
+                            "record_id": "14",
+                            "meal_type": "noon",
+                            "name": "米饭",
+                            "amount": 50,
+                            "unit": "g",
+                            "uniquekey": "/shiwu/mifan_zheng",
+                            "ntr": {"cal": 116, "protein": 2.6, "fat": 0.3, "carb": 25.9},
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+
+    entries = list(iter_food_entries(payload))
+
+    assert len(entries) == 1
+    assert entries[0]["record_date"] == date(2026, 8, 25)
+    assert entries[0]["meal_type"] == "lunch"
+    assert entries[0]["food_name"] == "米饭"
+    assert entries[0]["xunji_record_id"].startswith("food:2026-08-25:lunch:14:")
+
+
+def test_nutrition_sync_key_does_not_collapse_same_food_across_dates(db_session):
+    from myfitness.db.models import User
+
+    user = User(id=1, name="test")
+    db_session.add(user)
+    db_session.flush()
+
+    repo = NutritionLogRepository(db_session, user_id=1)
+    repo.upsert_from_sync(
+        record_date=date(2026, 8, 24),
+        meal_type="lunch",
+        food_name="米饭",
+        amount=50,
+        unit="g",
+        nutrients_snapshot={"cal": 58},
+        food_id=None,
+        xunji_record_id="food:2026-08-24:lunch:14:/shiwu/mifan_zheng:g",
+    )
+    repo.upsert_from_sync(
+        record_date=date(2026, 8, 25),
+        meal_type="dinner",
+        food_name="米饭",
+        amount=100,
+        unit="g",
+        nutrients_snapshot={"cal": 116},
+        food_id=None,
+        xunji_record_id="food:2026-08-25:dinner:14:/shiwu/mifan_zheng:g",
+    )
+    db_session.flush()
+
+    rows = db_session.query(NutritionLog).order_by(NutritionLog.record_date).all()
+    assert len(rows) == 2
+    assert [row.record_date for row in rows] == [date(2026, 8, 24), date(2026, 8, 25)]
 
 
 def test_parse_exercises():

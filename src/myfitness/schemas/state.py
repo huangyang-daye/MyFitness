@@ -103,7 +103,8 @@ class ContextSnapshot(BaseModel):
 
 
 class PendingConfirmation(BaseModel):
-    action_type: str  # db_write | xunji_write | plan_update | schedule_upsert | schedule_cancel
+    # db_write | xunji_write | plan_update | schedule_upsert | schedule_cancel | *_clarification
+    action_type: str
     summary: str
     payload: dict[str, Any]
     expires_at: datetime

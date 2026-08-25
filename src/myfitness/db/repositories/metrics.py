@@ -179,6 +179,7 @@ class NutritionLogRepository:
                 )
             )
             if existing:
+                existing.record_date = record_date
                 existing.meal_type = meal_type
                 existing.food_name = food_name
                 existing.amount = amount

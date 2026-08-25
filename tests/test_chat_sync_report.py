@@ -142,6 +142,73 @@ def test_chat_report_uses_route_date(db_session):
     assert "2026-08-21" in state.reply
 
 
+def test_chat_report_without_date_asks_for_date_then_generates(db_session):
+    """「生成日报」未指明日期时先追问，用户补日期后再生成。"""
+    state = new_chat_state(user_id=1)
+    with (
+        patch("myfitness.graph.chat.is_llm_configured", return_value=False),
+        patch("myfitness.graph.chat.run_daily_report") as report_mock,
+    ):
+        report_mock.return_value = {
+            "report_date": "2026-08-24",
+            "file_path": "/tmp/report.md",
+            "content_md": "# MyFitness 日报 — 2026-08-24",
+        }
+
+        state = run_chat_turn(db_session, state, "生成日报")
+
+        report_mock.assert_not_called()
+        assert state.pending_confirmation is not None
+        assert state.pending_confirmation.action_type == "report_date_clarification"
+        assert "哪天" in state.reply
+
+        state = run_chat_turn(db_session, state, "2026-08-24")
+
+    report_mock.assert_called_once()
+    assert report_mock.call_args.kwargs["report_date"] == date(2026, 8, 24)
+    assert state.pending_confirmation is None
+    assert "2026-08-24" in state.reply
+
+
+def test_chat_sync_and_report_without_date_asks_before_running(db_session):
+    """「同步数据并生成日报」缺日期时先追问，不提前同步。"""
+    state = new_chat_state(user_id=1)
+    with (
+        patch("myfitness.graph.chat.is_llm_configured", return_value=False),
+        patch("myfitness.graph.chat.run_sync") as sync_mock,
+        patch("myfitness.graph.chat.run_daily_report") as report_mock,
+    ):
+        sync_mock.return_value = {
+            "status": "success",
+            "start_date": "2026-08-24",
+            "end_date": "2026-08-24",
+            "results": {},
+            "errors": [],
+        }
+        report_mock.return_value = {
+            "report_date": "2026-08-24",
+            "file_path": "reports/2026-08-24.md",
+            "content_md": "# MyFitness 日报 — 2026-08-24",
+        }
+
+        state = run_chat_turn(db_session, state, "同步数据并生成日报")
+
+        sync_mock.assert_not_called()
+        report_mock.assert_not_called()
+        assert state.pending_confirmation is not None
+        assert state.pending_confirmation.action_type == "sync_report_date_clarification"
+        assert "先同步该日数据再生成日报" in state.reply
+
+        state = run_chat_turn(db_session, state, "2026-08-24")
+
+    assert sync_mock.call_args.kwargs["start_date"] == date(2026, 8, 24)
+    assert sync_mock.call_args.kwargs["end_date"] == date(2026, 8, 24)
+    assert report_mock.call_args.kwargs["report_date"] == date(2026, 8, 24)
+    assert state.pending_confirmation is None
+    assert "同步完成" in state.reply
+    assert "已生成" in state.reply
+
+
 def test_chat_llm_multi_intent_route_to_combo(db_session):
     """LLM 意图 Agent 识别出多意图时，同样走「先同步再日报」链路。"""
     from myfitness.schemas.state import RouteResult

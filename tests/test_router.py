@@ -116,6 +116,13 @@ def test_router_report_dot_date():
     assert result.start_date == date(2026, 8, 21)
 
 
+def test_router_report_without_date_has_no_range():
+    result = classify_intent("生成日报", use_llm=False, today=date(2026, 8, 24))
+    assert result.intents == [Intent.REPORT_TRIGGER]
+    assert result.start_date is None
+    assert result.end_date is None
+
+
 def test_router_schedule_takes_priority_over_daily_report():
     result = classify_intent("每天早上7点生成日报", use_llm=False)
     assert result.intents == [Intent.SCHEDULE_MANAGE]

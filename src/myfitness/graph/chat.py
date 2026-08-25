@@ -101,6 +101,9 @@ def prepare_chat_turn(
         state.reply = "确认已过期，请重新发起录入。"
         return ChatTurnResult(state=state, stream=False)
 
+    if state.pending_confirmation and _handle_pending_clarification(session, state):
+        return ChatTurnResult(state=state, stream=False)
+
     emit(on_progress, f"{label_for('classify_intent')}…")
     route = classify_intent(
         state.user_message,
@@ -334,6 +337,47 @@ def _handle_confirmation(
     _append_assistant(state)
 
 
+def _handle_pending_clarification(session: Session, state: MyFitnessGraphState) -> bool:
+    pending = state.pending_confirmation
+    if not pending or pending.action_type not in {
+        "report_date_clarification",
+        "sync_report_date_clarification",
+    }:
+        return False
+
+    text = state.user_message
+    lower = text.lower()
+    if any(w in lower or w in text for w in {"取消", "不要", "算了", "no", "cancel"}):
+        state.pending_confirmation = None
+        state.reply = "已取消，未生成日报。"
+        _append_assistant(state)
+        return True
+
+    report_date = parse_single_date(text)
+    if report_date is None:
+        state.reply = "还需要一个具体日期。请回复例如：昨天、今天、8月24日，或 2026-08-24。"
+        _append_assistant(state)
+        return True
+
+    action_type = pending.action_type
+    state.pending_confirmation = None
+    if action_type == "sync_report_date_clarification":
+        route = RouteResult(
+            intents=[Intent.SYNC_TRIGGER, Intent.REPORT_TRIGGER],
+            start_date=report_date,
+            end_date=report_date,
+        )
+        _handle_sync_and_report(session, state, route)
+    else:
+        route = RouteResult(
+            intents=[Intent.REPORT_TRIGGER],
+            start_date=report_date,
+            end_date=report_date,
+        )
+        _handle_report(session, state, route)
+    return True
+
+
 def _handle_sync(
     session: Session,
     state: MyFitnessGraphState,
@@ -367,11 +411,15 @@ def _handle_sync_and_report(
     """组合意图：先同步指定日期数据，再基于新数据生成该日日报。"""
     report_date = route.end_date or route.start_date
     if report_date is None:
-        report_date = parse_single_date(
-            state.user_message,
-            default=date.today() - timedelta(days=1),
+        _ask_report_date(
+            state,
+            action_type="sync_report_date_clarification",
+            prompt=(
+                "你想生成哪天的日报？请回复具体日期，例如：昨天、今天、8月24日，"
+                "或 2026-08-24。确认日期后我会先同步该日数据再生成日报。"
+            ),
         )
-        assert report_date is not None
+        return
     sync_start = route.start_date or report_date
     sync_end = route.end_date or report_date
 
@@ -468,11 +516,15 @@ def _handle_report(
     if route:
         report_date = route.end_date or route.start_date
     if report_date is None:
-        report_date = parse_single_date(
-            state.user_message,
-            default=date.today() - timedelta(days=1),
+        _ask_report_date(
+            state,
+            action_type="report_date_clarification",
+            prompt=(
+                "你想生成哪天的日报？请回复具体日期，例如：昨天、今天、8月24日，"
+                "或 2026-08-24。"
+            ),
         )
-    assert report_date is not None
+        return
     try:
         result = run_daily_report(
             session,
@@ -491,6 +543,18 @@ def _handle_report(
     except Exception as exc:
         state.errors.append(str(exc))
         state.reply = f"生成日报失败：{exc}"
+    _append_assistant(state)
+
+
+def _ask_report_date(state: MyFitnessGraphState, action_type: str, prompt: str) -> None:
+    state.pending_confirmation = PendingConfirmation(
+        action_type=action_type,
+        summary=prompt,
+        payload={"original_message": state.user_message},
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+        domain="report",
+    )
+    state.reply = prompt
     _append_assistant(state)
 
 

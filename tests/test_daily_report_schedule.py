@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from myfitness.agents.schedule_parser import parse_schedule_request
-from myfitness.db.models import Base, BodyMetric, TrainingLog, User
+from myfitness.db.models import Base, BodyMetric, NutritionLog, TrainingLog, User
 from myfitness.db.repositories.metrics import SOURCE_MANUAL
 from myfitness.db.repositories.reports import DailyReportRepository, ScheduledTaskRepository
 from myfitness.graph.chat import new_chat_state, run_chat_turn
@@ -135,6 +135,66 @@ def test_daily_report_training_section_shows_detail(db_session):
     assert "12.5kg×12" in content
 
 
+def test_daily_report_body_and_nutrition_sections_show_detail(db_session):
+    db_session.add_all(
+        [
+            BodyMetric(
+                user_id=1,
+                record_date=date(2026, 8, 22),
+                metric_type="weight",
+                value=72.0,
+                unit="kg",
+                source=SOURCE_MANUAL,
+            ),
+            BodyMetric(
+                user_id=1,
+                record_date=date(2026, 8, 22),
+                metric_type="bodyfat",
+                value=18.5,
+                unit="%",
+                source="xunji_sync",
+            ),
+            NutritionLog(
+                user_id=1,
+                record_date=date(2026, 8, 22),
+                meal_type="lunch",
+                food_name="鸡胸肉",
+                amount=200,
+                unit="g",
+                nutrients_snapshot={"cal": 330, "protein": 62, "fat": 7, "carb": 0},
+                source=SOURCE_MANUAL,
+            ),
+            NutritionLog(
+                user_id=1,
+                record_date=date(2026, 8, 22),
+                meal_type="dinner",
+                food_name="米饭",
+                amount=100,
+                unit="g",
+                nutrients_snapshot={"cal": 116, "protein": 2.6, "fat": 0.3, "carb": 25.9},
+                source="xunji_sync",
+            ),
+        ]
+    )
+    db_session.flush()
+
+    result = run_daily_report(
+        db_session,
+        1,
+        report_date=date(2026, 8, 22),
+        sync_first=False,
+    )
+
+    content = result["content_md"]
+    assert "### 身体（报告日）" in content
+    assert "| 体重 | 72 kg | manual |" in content
+    assert "| 体脂率 | 18.5 % | xunji_sync |" in content
+    assert "### 饮食（报告日）" in content
+    assert "| 当日合计 | 446 kcal | 64.6 g | 25.9 g | 7.3 g |" in content
+    assert "| 午餐 | 鸡胸肉 | 200 g | 330 kcal | 62 g | 0 g | 7 g | manual |" in content
+    assert "| 晚餐 | 米饭 | 100 g | 116 kcal | 2.6 g | 25.9 g | 0.3 g | xunji_sync |" in content
+
+
 def test_format_daily_report_md_no_training():
     from myfitness.schemas.state import ContextSnapshot, DateRange
 
@@ -151,6 +211,8 @@ def test_format_daily_report_md_no_training():
         training_sessions=[],
     )
     assert "报告日无训练记录。" in md
+    assert "报告日无身体数据记录。" in md
+    assert "报告日无饮食明细记录。" in md
     assert "报告日训练次数" not in md
 
 

@@ -5,6 +5,17 @@ from typing import Any, Iterator
 
 from myfitness.xunji.skills import MEAL_TYPES
 
+MEAL_TYPE_ALIASES = {
+    "morning": "breakfast",
+    "breakfast": "breakfast",
+    "noon": "lunch",
+    "noon-added": "lunch",
+    "lunch": "lunch",
+    "night": "dinner",
+    "dinner": "dinner",
+    "snack": "snack",
+}
+
 
 def parse_record_date(value: str) -> date:
     return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
@@ -14,6 +25,7 @@ def normalize_meal_type(value: str | None) -> str:
     if not value:
         return "other"
     normalized = str(value).lower().strip()
+    normalized = MEAL_TYPE_ALIASES.get(normalized, normalized)
     return normalized if normalized in MEAL_TYPES else "other"
 
 
@@ -83,11 +95,33 @@ def _flatten_day(day: dict[str, Any]) -> list[dict[str, Any]]:
                     }
                 )
 
-    for food in day.get("foods") or []:
-        if isinstance(food, dict):
-            entries.append({**food, "date": food.get("date") or day_date})
+    foods = day.get("foods")
+    if isinstance(foods, dict):
+        for food in foods.get("records") or []:
+            if isinstance(food, dict):
+                entries.append({**food, "date": food.get("date") or day_date})
+    else:
+        for food in foods or []:
+            if isinstance(food, dict):
+                entries.append({**food, "date": food.get("date") or day_date})
 
     return entries
+
+
+def _build_xunji_record_id(raw: dict[str, Any], datestr: str, meal_type: str, unit: str) -> str | None:
+    food_ref = raw.get("id") or raw.get("record_id") or raw.get("uniquekey") or raw.get("name")
+    if not food_ref:
+        return None
+    return ":".join(
+        [
+            "food",
+            str(datestr)[:10],
+            meal_type,
+            str(food_ref),
+            str(raw.get("uniquekey") or raw.get("name") or ""),
+            unit,
+        ]
+    )
 
 
 def iter_food_entries(query_result: dict[str, Any] | list) -> Iterator[dict[str, Any]]:
@@ -115,13 +149,14 @@ def iter_food_entries(query_result: dict[str, Any] | list) -> Iterator[dict[str,
         nutrients = raw.get("nutrients_snapshot") or raw.get("nutrients")
         amount = float(raw.get("amount") or raw.get("count") or 0)
         unit = str(raw.get("unit") or "g")
+        meal_type = normalize_meal_type(raw.get("meal_type") or raw.get("meal"))
 
         if not nutrients and ntr:
             nutrients = calc_nutrients_from_ntr(ntr, amount)
 
         yield {
             "record_date": parse_record_date(str(datestr)),
-            "meal_type": normalize_meal_type(raw.get("meal_type") or raw.get("meal")),
+            "meal_type": meal_type,
             "food_name": raw.get("name") or raw.get("food_name") or "unknown",
             "amount": amount,
             "unit": unit,
@@ -129,7 +164,7 @@ def iter_food_entries(query_result: dict[str, Any] | list) -> Iterator[dict[str,
             "nutrients_snapshot": nutrients or {"cal": 0, "protein": 0, "fat": 0, "carb": 0},
             "uniquekey": raw.get("uniquekey"),
             "units": raw.get("units"),
-            "xunji_record_id": str(raw.get("id") or raw.get("record_id") or raw.get("uniquekey") or "") or None,
+            "xunji_record_id": _build_xunji_record_id(raw, str(datestr), meal_type, unit),
         }
 
 

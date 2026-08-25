@@ -83,7 +83,7 @@ def build_system_prompt(today: date) -> str:
 ## 易混淆情况
 1. 出现「每天/每日/定时/固定」+ 任何动作 → schedule_manage，而**不是** report_trigger / sync_trigger。
    例：「每天8点同步数据」→ schedule_manage。
-2. 「生成日报」未指明日期时默认指**昨天**的报告，此时 date_range 填 null（由系统按默认处理）；指明日期则用该日期。
+2. 「生成日报」未指明日期时 date_range 填 null，由对话层向用户追问具体日期；指明日期则用该日期。
 3. data_query 与 trend_analysis 的区别：问「某天/某段是多少/有没有」是 data_query；问「变化/趋势/对比」是 trend_analysis。
 4. 带数量描述的食物语句（吃了鸡胸肉200g、鸡蛋2个）→ manual_entry，不是 data_query。
 5. 「目标/降到/增到/减到 + 数值单位」→ goal_setting。
