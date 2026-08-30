@@ -6,6 +6,7 @@ import logging
 from collections.abc import Iterator
 
 from myfitness.agents.tools.query_format import format_query_results
+from myfitness.debug import trace_agent
 from myfitness.llm.factory import is_llm_configured, stream_chat_completion
 from myfitness.schemas.agent_outputs import AgentOutputs, SummaryAgentOutput
 from myfitness.schemas.constants import DISCLAIMER
@@ -14,6 +15,7 @@ from myfitness.schemas.state import ContextSnapshot, Intent
 logger = logging.getLogger(__name__)
 
 
+@trace_agent("SummaryAgent")
 def run_summary_agent(
     agent_outputs: AgentOutputs,
     context: ContextSnapshot | None,
@@ -61,7 +63,9 @@ def build_rule_based_summary(
 
     if not sections:
         if intent == Intent.GENERAL:
-            sections.append("你好！我是 MyFitness 健康助手，可以帮你查询数据、记录饮食/体重、分析趋势。")
+            sections.append(
+                "你好！我是 MyFitness 健康助手，可以帮你查询数据、记录饮食/体重、分析趋势。"
+            )
         else:
             sections.append("暂无足够数据生成分析，请先同步训记数据或手动录入。")
 
@@ -119,6 +123,7 @@ def should_stream_summary(intent: Intent) -> bool:
     }
 
 
+@trace_agent("SummaryAgent.stream")
 def iter_summary_reply(
     agent_outputs: AgentOutputs,
     context: ContextSnapshot | None,
@@ -140,7 +145,7 @@ def iter_summary_reply(
                 return
             # 空响应 → 规则兜底
             logger.warning("LLM 返回空回复，使用规则模板兜底")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - streaming failures use rule fallback
             logger.warning("LLM 流式失败，使用规则模板兜底: %s", exc)
             if not emitted:
                 yield build_rule_based_summary(agent_outputs, context, intent)

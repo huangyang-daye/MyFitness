@@ -11,8 +11,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
+from myfitness.debug import trace_agent
 from myfitness.llm.factory import chat_completion, is_llm_configured
 from myfitness.schemas.state import Intent, RouteResult
 
@@ -25,8 +27,14 @@ _MAX_INTENTS = 3
 
 _INTENT_VALUES = {i.value for i in Intent}
 _VALID_DOMAINS = {"body", "nutrition", "fitness"}
+_LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 # 域的常见别名归一
-_DOMAIN_ALIASES = {"training": "fitness", "diet": "nutrition", "food": "nutrition", "exercise": "fitness"}
+_DOMAIN_ALIASES = {
+    "training": "fitness",
+    "diet": "nutrition",
+    "food": "nutrition",
+    "exercise": "fitness",
+}
 
 
 def build_system_prompt(today: date) -> str:
@@ -159,12 +167,13 @@ def build_system_prompt(today: date) -> str:
 """
 
 
+@trace_agent("IntentAgent")
 def run_intent_agent(message: str, today: date | None = None) -> RouteResult | None:
     """LLM 意图识别。未配置 LLM 或调用/解析失败时返回 None（由关键词兜底）。"""
     if not is_llm_configured():
         return None
 
-    today = today or date.today()
+    today = today or datetime.now(_LOCAL_TZ).date()
     try:
         content = chat_completion(
             [
@@ -173,7 +182,7 @@ def run_intent_agent(message: str, today: date | None = None) -> RouteResult | N
             ],
             temperature=0,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - LLM failure must fall back to rules
         logger.warning("意图 Agent LLM 调用失败，回退关键词匹配: %s", exc)
         return None
 
@@ -182,7 +191,7 @@ def run_intent_agent(message: str, today: date | None = None) -> RouteResult | N
 
 def parse_agent_response(content: str, today: date | None = None) -> RouteResult | None:
     """解析并校验 LLM 输出；任何不合法之处都尽量降级而不是整体失败。"""
-    today = today or date.today()
+    today = today or datetime.now(_LOCAL_TZ).date()
     data = _extract_json(content)
     if data is None or not isinstance(data, dict):
         logger.warning("意图 Agent 输出非 JSON: %r", content[:200])

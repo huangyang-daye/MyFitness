@@ -24,6 +24,8 @@ from __future__ import annotations
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy.orm import Session
 
+from myfitness.debug import trace_tool_call
+
 
 def tool_config(session: Session, user_id: int) -> RunnableConfig:
     """构造注入 `session` / `user_id` 的 RunnableConfig。"""
@@ -42,9 +44,14 @@ def invoke_tool(tool, session: Session, user_id: int, /, **kwargs):
         user_id: 当前用户 ID（注入，非 LLM 参数）。
         kwargs: 工具的其余业务参数（如 start_date / end_date / metric 等）。
     """
-    return tool.invoke(
-        {"session": session, "user_id": user_id, **kwargs},
-        config=tool_config(session, user_id),
+    return trace_tool_call(
+        tool,
+        user_id,
+        kwargs,
+        lambda: tool.invoke(
+            {"session": session, "user_id": user_id, **kwargs},
+            config=tool_config(session, user_id),
+        ),
     )
 
 

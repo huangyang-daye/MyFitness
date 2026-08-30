@@ -12,10 +12,11 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from myfitness.agents.tools.chart_tools import INSERT_DOC_KEYWORDS, is_chart_request
-from myfitness.agents.tools.query_planner import parse_single_date
+from myfitness.debug import log_intent_result
 from myfitness.schemas.state import Intent, PendingConfirmation, RouteResult
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ _RECENT_DAYS_RE = re.compile(r"最?\s*近\s*(\d+)\s*天")
 _PAST_DAYS_RE = re.compile(r"(?:过[去了]?|前)\s*(\d+)\s*天")
 _SCHEDULE_WORDS = ("定时", "每天", "每日", "自动")
 _SCHEDULE_ACTION_WORDS = ("日报", "同步", "任务", "报告")
+_LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def classify_intent(
@@ -44,14 +46,18 @@ def classify_intent(
     """
     text = message.strip()
     lower = text.lower()
-    today = today or date.today()
+    today = today or datetime.now(_LOCAL_TZ).date()
 
     # ① 有待确认操作时，先匹配确认/取消词（无歧义，无需 LLM）
     if pending and _is_confirmation_response(text):
         if any(w in lower or w in text for w in CONFIRM_WORDS):
-            return RouteResult(Intent.CONFIRMATION_RESPONSE, confirmation_action="confirm")
+            result = RouteResult(Intent.CONFIRMATION_RESPONSE, confirmation_action="confirm")
+            log_intent_result(text, result, source="confirmation_rule")
+            return result
         if any(w in lower or w in text for w in CANCEL_WORDS):
-            return RouteResult(Intent.CONFIRMATION_RESPONSE, confirmation_action="cancel")
+            result = RouteResult(Intent.CONFIRMATION_RESPONSE, confirmation_action="cancel")
+            log_intent_result(text, result, source="confirmation_rule")
+            return result
 
     keyword = _keyword_classify(text, today)
 
@@ -59,14 +65,19 @@ def classify_intent(
     if use_llm:
         llm_result = _llm_classify(text, today)
         if llm_result is not None:
-            return _reconcile(llm_result, keyword)
+            result = _reconcile(llm_result, keyword)
+            log_intent_result(text, result, source="llm_reconciled")
+            return result
         logger.info("意图 Agent 未返回有效结果，使用关键词匹配兜底")
 
     # ③ 关键词兜底
     if keyword:
+        log_intent_result(text, keyword, source="keyword")
         return keyword
 
-    return RouteResult(intents=[Intent.GENERAL])
+    result = RouteResult(intents=[Intent.GENERAL])
+    log_intent_result(text, result, source="default")
+    return result
 
 
 def _reconcile(llm: RouteResult, keyword: RouteResult | None) -> RouteResult:
@@ -81,27 +92,24 @@ def _reconcile(llm: RouteResult, keyword: RouteResult | None) -> RouteResult:
     if keyword is not None:
         if llm.intent == Intent.GENERAL and keyword.intent != Intent.GENERAL:
             return keyword
-        if (
+        handles_date_range = (
             llm.has(Intent.SYNC_TRIGGER)
             or llm.has(Intent.REPORT_TRIGGER)
             or llm.has(Intent.CHART_TRIGGER)
-        ):
-            # LLM 漏日期 → 用关键词补齐
-            if llm.start_date is None and keyword.start_date is not None:
-                llm.start_date = keyword.start_date
-                llm.end_date = keyword.end_date
-            # LLM 范围比关键词窄且关键词为其超集 → 拓宽（防漏掉「昨天和今天」中的昨天）
-            elif (
-                llm.start_date
-                and llm.end_date
-                and keyword.start_date
-                and keyword.end_date
-                and keyword.start_date <= llm.start_date
-                and keyword.end_date >= llm.end_date
-                and (keyword.start_date < llm.start_date or keyword.end_date > llm.end_date)
-            ):
-                llm.start_date = keyword.start_date
-                llm.end_date = keyword.end_date
+        )
+        llm_missed_date = llm.start_date is None and keyword.start_date is not None
+        keyword_is_wider = bool(
+            llm.start_date
+            and llm.end_date
+            and keyword.start_date
+            and keyword.end_date
+            and keyword.start_date <= llm.start_date
+            and keyword.end_date >= llm.end_date
+            and (keyword.start_date < llm.start_date or keyword.end_date > llm.end_date)
+        )
+        if handles_date_range and (llm_missed_date or keyword_is_wider):
+            llm.start_date = keyword.start_date
+            llm.end_date = keyword.end_date
     return llm
 
 
@@ -124,7 +132,7 @@ def _is_report_request(text: str) -> bool:
 
 
 def _keyword_classify(text: str, today: date | None = None) -> RouteResult | None:
-    today = today or date.today()
+    today = today or datetime.now(_LOCAL_TZ).date()
 
     # 定时任务（重复性任务管理优先级最高，防止「每天…生成日报」误判为一次性日报）
     if any(k in text for k in ("定时任务", "查看定时", "取消定时", "停用定时")) or (
@@ -182,7 +190,7 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
     if re.search(r"(最?\s*近\s*\d+\s*天|近\s*\d+\s*天).*(蛋白|热量|体重|训练|吃)", text):
         return RouteResult(Intent.DATA_QUERY, domain=_infer_domain_from_text(text))
 
-    if re.search(r"(目标|降到|增到|减到).*(kg|公斤|%)", text, re.I):
+    if re.search(r"(目标|降到|增到|减到).*(kg|公斤|%)", text, re.IGNORECASE):
         return RouteResult(Intent.GOAL_SETTING, domain="body")
 
     if re.search(r"(多少|查询|昨天|今天).*(蛋白|热量|体重|训练|吃)", text):

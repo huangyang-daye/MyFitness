@@ -68,8 +68,15 @@ myfitness sync --days 7
 | `myfitness chart show --metric weight --days 7` | 输出体重折线图（Mermaid） |
 | `myfitness chart show --metric calories --days 30 --type bar --save` | 生成热量柱状图并保存为文档 |
 | `myfitness chart insert reports/2026-08-24.md --metric weight --days 7` | 把折线图插入已有日报 |
-| `myfitness llm config` | 查看 LLM 配置 |
-| `myfitness llm test` | 测试 LLM 连通性 |
+| `myfitness llm list` | 查看 Web / CLI 共用的模型预设及当前生效项 |
+| `myfitness llm add --name DeepSeek --base-url https://api.deepseek.com/v1 --model deepseek-chat --activate` | 新增并切换模型预设 |
+| `myfitness llm edit <ID> ...` / `activate <ID>` / `delete <ID>` | 编辑、切换或删除模型预设 |
+| `myfitness llm test --id <ID>` | 测试当前或指定模型的连通性 |
+| `myfitness scheduler list` | 查看任务 ID、启停状态及最近执行结果 |
+| `myfitness scheduler edit <ID> --time 21:30 --disabled` | 编辑任务名称、内容、时间或启停状态 |
+| `myfitness scheduler enable <ID>` / `disable <ID>` | 快速启用或停用定时任务 |
+| `myfitness session list` / `session show <UUID>` | 列出或查看 Web / CLI 共用的历史对话 |
+| `myfitness artifact show <PATH>` | 安全查看 `DATA_DIR` 内的报表或图表产物 |
 | `myfitness chat --session <UUID>` | 按 UUID 恢复一段历史对话 |
 | `myfitness ui` | 启动三栏式本地 Agent 可视化界面 |
 
@@ -98,8 +105,33 @@ myfitness ui --no-open --port 8765
 CLI 也使用同一份历史仓库。启动新对话时会打印 UUID，之后可恢复：
 
 ```powershell
+myfitness session list
+myfitness session show 550e8400-e29b-41d4-a716-446655440000
 myfitness chat --session 550e8400-e29b-41d4-a716-446655440000
 ```
+
+交互式 `chat` 中可直接使用斜杠命令：
+
+| 命令 | 行为 |
+|------|------|
+| `/model` | 打开模型选择页，用 `↑` / `↓` 移动焦点、`Enter` 确认、`Esc` 取消 |
+| `/resume` | 打开会话选择页；确认后切换到对话页并回放完整历史记录 |
+| `/help` | 显示可用的交互命令 |
+
+不带 `--session` 启动时，CLI 先显示 MyFitness 首页：左侧为绿色训练剪影，右侧展示项目名称、
+帮助、提示和当前模型，下方为消息输入区。首页阶段不会创建空会话；只有提交第一条普通消息后
+才生成 UUID 并写入会话仓库。终端不支持原始方向键输入时，选择页会自动回退到序号输入。
+
+需要排查 Agent 编排时，可在子命令前加全局 `--debug`：
+
+```powershell
+myfitness --debug chat
+myfitness --debug ui
+```
+
+Debug 模式会打印每次 Intent / Body / Nutrition / Fitness / Summary Agent 调用、每次 Tool
+调用与结果，以及最终意图识别来源、组合意图、领域和日期范围。过长内容会截断，API Key、Token、
+Authorization 和密码字段会脱敏。也可在 `.env` 中设置 `DEBUG_MODE=true` 持久启用。
 
 ## 周期报表与统计图
 
@@ -148,9 +180,13 @@ LLM_TIMEOUT=120
 
 支持 DeepSeek、Ollama 代理等任意 OpenAI 兼容服务，只需修改 `LLM_BASE_URL` 与 `LLM_MODEL`。
 
+Web 设置页和 CLI 共用 `<DATA_DIR>/llm-models.json` 中的模型预设；API Key 在列表和配置输出中始终脱敏：
+
 ```bash
-myfitness llm config   # 查看配置（Key 脱敏）
-myfitness llm test     # 发送测试请求
+myfitness llm providers
+myfitness llm add --name DeepSeek --base-url https://api.deepseek.com/v1 --model deepseek-chat --activate
+myfitness llm list
+myfitness llm test
 ```
 
 Agent 功能需额外安装：`pip install -e ".[agents]"`，代码中通过 `myfitness.llm.get_llm()` 获取 LangChain 客户端。

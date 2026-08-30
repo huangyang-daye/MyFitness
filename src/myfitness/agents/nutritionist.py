@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import date
 
+from myfitness.debug import trace_agent
 from myfitness.schemas.agent_outputs import (
     DailyTotals,
-    MealAnalysisItem,
     NutritionAgentOutput,
     NutritionBalance,
     TdeeEstimate,
@@ -14,6 +14,7 @@ from myfitness.schemas.agent_outputs import (
 from myfitness.schemas.state import ContextSnapshot
 
 
+@trace_agent("NutritionistAgent")
 def run_nutrition_agent(
     context: ContextSnapshot, analysis_date: date | None = None
 ) -> NutritionAgentOutput:
@@ -31,7 +32,9 @@ def run_nutrition_agent(
     )
 
     balance = NutritionBalance(
-        calorie_delta=daily.calories - (tdee.target_calories or 0) if tdee.target_calories else None,
+        calorie_delta=daily.calories - (tdee.target_calories or 0)
+        if tdee.target_calories
+        else None,
         protein_per_kg=round(daily.protein_g / weight, 2) if weight else None,
         assessment=_assess_balance(daily, tdee),
     )

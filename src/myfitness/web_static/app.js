@@ -1,4 +1,5 @@
 const LAYOUT_KEY = "myfitness.layout";
+const THEME_KEY = "myfitness.theme";
 const NARROW_INSPECTOR = 1180;
 const NARROW_SIDEBAR = 760;
 
@@ -6,7 +7,9 @@ const state = {
   sessions: [],
   activeId: null,
   currentSession: null,
+  draft: true,
   sending: false,
+  draft: true,
   tasks: [],
   taskTypes: {},
   editingTaskId: null,
@@ -16,6 +19,7 @@ const state = {
   editingModelId: null,
   artifacts: [],
   openArtifactPath: null,
+  theme: "dark",
 };
 
 const el = (id) => document.getElementById(id);
@@ -41,33 +45,284 @@ async function api(url, options = {}) {
   return data;
 }
 
+const MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+let mermaidLoader = null;
+
+function chartColors() {
+  const style = getComputedStyle(document.documentElement);
+  return [
+    style.getPropertyValue("--chart-1").trim() || "#b7f34a",
+    style.getPropertyValue("--chart-2").trim() || "#7fc7ff",
+    style.getPropertyValue("--chart-3").trim() || "#c4a7ff",
+    style.getPropertyValue("--chart-4").trim() || "#ffbd73",
+  ];
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
   }[char]));
 }
 
-function renderMarkdown(source) {
-  const codeBlocks = [];
-  let text = escapeHtml(source).replace(/```([\w-]*)\n([\s\S]*?)```/g, (_, language, code) => {
-    const lang = (language || "").toLowerCase();
-    const block = lang === "mermaid"
-      ? `<pre class="mermaid-block"><span class="mermaid-tag">Mermaid 图</span><code>${code.trim()}</code></pre>`
-      : `<pre><code data-language="${escapeHtml(language)}">${code.trim()}</code></pre>`;
-    return `@@CODEBLOCK${codeBlocks.push(block) - 1}@@`;
-  });
-  text = text
-    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
-    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
-    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+function safeHref(href) {
+  const decoded = String(href || "").replace(/&amp;/g, "&");
+  if (/^(https?:|mailto:)/i.test(decoded)) return href;
+  if (decoded.startsWith("#") || decoded.startsWith("/")) return href;
+  return "#";
+}
+
+function formatInline(text) {
+  return text
     .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/^[-*] (.+)$/gm, "<li>$1</li>")
-    .replace(/(?:<li>.*<\/li>\n?)+/g, (list) => `<ul>${list}</ul>`)
-    .split(/\n{2,}/)
-    .map((block) => /^(<h\d|<ul|<pre|@@CODEBLOCK)/.test(block) ? block : `<p>${block.replace(/\n/g, "<br>")}</p>`)
-    .join("");
-  return text.replace(/@@CODEBLOCK(\d+)@@/g, (_, index) => codeBlocks[Number(index)]);
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, href) => (
+      `<a href="${safeHref(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    ))
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*(?!\*)([^*]+)\*(?!\*)/g, "$1<em>$2</em>")
+    .replace(/(^|[^_])_([^_]+)_/g, "$1<em>$2</em>");
+}
+
+function splitTableRow(line) {
+  return line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
+}
+
+function isTableRow(line) {
+  return /^\s*\|.+\|\s*$/.test(line);
+}
+
+function isTableSeparator(line) {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+function renderMarkdownTables(text) {
+  const lines = text.split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (isTableRow(lines[i]) && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      const header = splitTableRow(lines[i]);
+      const aligns = splitTableRow(lines[i + 1]).map((cell) => {
+        const left = cell.startsWith(":");
+        const right = cell.endsWith(":");
+        if (left && right) return "center";
+        if (right) return "right";
+        return "left";
+      });
+      i += 2;
+      const rows = [];
+      while (i < lines.length && isTableRow(lines[i])) {
+        rows.push(splitTableRow(lines[i]));
+        i += 1;
+      }
+      i -= 1;
+      const head = header.map((cell, index) => (
+        `<th style="text-align:${aligns[index] || "left"}">${formatInline(cell)}</th>`
+      )).join("");
+      const body = rows.map((row) => `<tr>${row.map((cell, index) => (
+        `<td style="text-align:${aligns[index] || "left"}">${formatInline(cell)}</td>`
+      )).join("")}</tr>`).join("");
+      out.push(`<div class="md-table-wrap"><table class="md-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`);
+      continue;
+    }
+    out.push(lines[i]);
+  }
+  return out.join("\n");
+}
+
+function renderMarkdownLists(text) {
+  text = text.replace(/(?:^\d+\. .+(?:\n|$))+/gm, (block) => {
+    const items = block.trim().split("\n").map((line) => (
+      `<li>${formatInline(line.replace(/^\d+\.\s+/, ""))}</li>`
+    )).join("");
+    return `<ol>${items}</ol>\n`;
+  });
+  return text.replace(/(?:^[-*] .+(?:\n|$))+/gm, (block) => {
+    const items = block.trim().split("\n").map((line) => (
+      `<li>${formatInline(line.replace(/^[-*]\s+/, ""))}</li>`
+    )).join("");
+    return `<ul>${items}</ul>\n`;
+  });
+}
+
+function parseQuotedList(inner) {
+  return [...String(inner || "").matchAll(/"([^"]*)"/g)].map((match) => match[1]);
+}
+
+function parseXyChart(source) {
+  const text = String(source || "").trim();
+  if (!/^xychart-beta\b/i.test(text)) return null;
+  const title = (text.match(/title\s+"([^"]*)"/) || [])[1] || "";
+  const xMatch = text.match(/x-axis\s+(?:"[^"]*"\s+)?\[([\s\S]*?)\]/);
+  const xLabels = xMatch ? parseQuotedList(xMatch[1]) : [];
+  const yMatch = text.match(/y-axis\s+"([^"]*)"(?:\s+([-\d.]+)\s+-->\s+([-\d.]+))?/);
+  const series = [];
+  const seriesRe = /^\s*(line|bar)\s+\[([^\]]*)\]/gm;
+  let match;
+  while ((match = seriesRe.exec(text))) {
+    series.push({
+      type: match[1].toLowerCase(),
+      values: match[2].split(",").map((value) => Number(value.trim())).filter(Number.isFinite),
+    });
+  }
+  if (!xLabels.length || !series.length) return null;
+  let yMin = yMatch && yMatch[2] != null ? Number(yMatch[2]) : NaN;
+  let yMax = yMatch && yMatch[3] != null ? Number(yMatch[3]) : NaN;
+  if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) {
+    const values = series.flatMap((item) => item.values);
+    yMin = Math.min(...values);
+    yMax = Math.max(...values);
+  }
+  if (yMin === yMax) {
+    yMin -= 1;
+    yMax += 1;
+  }
+  return { title, xLabels, yLabel: yMatch ? yMatch[1] : "", yMin, yMax, series };
+}
+
+function formatTick(value) {
+  const abs = Math.abs(value);
+  if (abs >= 100) return String(Math.round(value));
+  const rounded = Math.round(value * 100) / 100;
+  return String(rounded);
+}
+
+function renderXyChartSvg(chart) {
+  const width = 720;
+  const height = 300;
+  const pad = { t: chart.title ? 38 : 18, r: 20, b: 42, l: 58 };
+  const innerW = width - pad.l - pad.r;
+  const innerH = height - pad.t - pad.b;
+  const count = Math.max(chart.xLabels.length, ...chart.series.map((item) => item.values.length), 1);
+  const xAt = (index) => pad.l + (count === 1 ? innerW / 2 : (index / (count - 1)) * innerW);
+  const yAt = (value) => pad.t + (1 - (value - chart.yMin) / (chart.yMax - chart.yMin)) * innerH;
+  const ticks = 4;
+  let marks = "";
+  for (let i = 0; i <= ticks; i += 1) {
+    const value = chart.yMin + ((chart.yMax - chart.yMin) * i) / ticks;
+    const y = yAt(value);
+    marks += `<line class="chart-grid" x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}"></line>`;
+    marks += `<text class="chart-tick" x="${pad.l - 8}" y="${y + 3}" text-anchor="end">${formatTick(value)}</text>`;
+  }
+  const colors = chartColors();
+  const barSeries = chart.series.filter((item) => item.type === "bar");
+  let plots = "";
+  chart.series.forEach((item, seriesIndex) => {
+    const color = colors[seriesIndex % colors.length];
+    if (item.type === "bar") {
+      const group = count === 1 ? innerW * 0.36 : innerW / count;
+      const barW = Math.max(4, (group * 0.62) / Math.max(barSeries.length, 1));
+      const offset = barSeries.indexOf(item);
+      item.values.forEach((value, index) => {
+        const x = xAt(index) - (barSeries.length * barW) / 2 + offset * barW;
+        const y = yAt(value);
+        const barH = Math.max(0, yAt(chart.yMin) - y);
+        plots += `<rect x="${x}" y="${y}" width="${barW}" height="${barH}" rx="2" fill="${color}" opacity="0.92"><title>${escapeHtml(chart.xLabels[index] || "")}: ${value}</title></rect>`;
+      });
+      return;
+    }
+    const points = item.values.map((value, index) => `${xAt(index)},${yAt(value)}`).join(" ");
+    const baseline = `${xAt(0)},${yAt(chart.yMin)} ${points} ${xAt(item.values.length - 1)},${yAt(chart.yMin)}`;
+    plots += `<polygon fill="${color}" opacity="0.12" points="${baseline}"></polygon>`;
+    plots += `<polyline fill="none" stroke="${color}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="${points}"></polyline>`;
+    item.values.forEach((value, index) => {
+      plots += `<circle cx="${xAt(index)}" cy="${yAt(value)}" r="3.4" fill="${color}" stroke="var(--chart-bg)" stroke-width="1.2"><title>${escapeHtml(chart.xLabels[index] || "")}: ${value}</title></circle>`;
+    });
+  });
+  const step = Math.max(1, Math.ceil(count / 8));
+  let labels = "";
+  chart.xLabels.forEach((label, index) => {
+    if (index % step !== 0 && index !== count - 1) return;
+    labels += `<text class="chart-tick" x="${xAt(index)}" y="${height - 14}" text-anchor="middle">${escapeHtml(label)}</text>`;
+  });
+  const title = chart.title
+    ? `<text class="chart-title" x="${width / 2}" y="22" text-anchor="middle">${escapeHtml(chart.title)}</text>`
+    : "";
+  const yTitle = chart.yLabel
+    ? `<text class="chart-axis-title" x="14" y="${pad.t + innerH / 2}" text-anchor="middle" transform="rotate(-90 14 ${pad.t + innerH / 2})">${escapeHtml(chart.yLabel)}</text>`
+    : "";
+  return `<div class="chart-card"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(chart.title || chart.yLabel || "统计图")}">${title}${yTitle}${marks}${plots}${labels}</svg></div>`;
+}
+
+function renderMermaidBlock(code) {
+  const chart = parseXyChart(code);
+  if (chart) return renderXyChartSvg(chart);
+  return `<div class="mermaid-wrap"><pre class="mermaid">${escapeHtml(code)}</pre></div>`;
+}
+
+function renderMarkdown(source) {
+  const blocks = [];
+  const normalized = String(source ?? "").replace(/\r\n/g, "\n");
+  let text = normalized.replace(/```([\w-]*)[ \t]*\n([\s\S]*?)```/g, (_, language, code) => {
+    const lang = (language || "").toLowerCase();
+    const html = lang === "mermaid"
+      ? renderMermaidBlock(code.trim())
+      : `<pre><code${lang ? ` data-language="${escapeHtml(lang)}"` : ""}>${escapeHtml(code.trim())}</code></pre>`;
+    return `\n@@CODEBLOCK${blocks.push(html) - 1}@@\n`;
+  });
+  text = escapeHtml(text);
+  text = renderMarkdownTables(text);
+  text = text
+    .replace(/^#{3} (.+)$/gm, (_, title) => `<h3>${formatInline(title)}</h3>`)
+    .replace(/^#{2} (.+)$/gm, (_, title) => `<h2>${formatInline(title)}</h2>`)
+    .replace(/^# (.+)$/gm, (_, title) => `<h1>${formatInline(title)}</h1>`)
+    .replace(/^(?:-\s*){3,}$/gm, "<hr>")
+    .replace(/(?:^&gt; .+\n?)+/gm, (block) => {
+      const body = block.replace(/^&gt; /gm, "").trim().replace(/\n/g, "<br>");
+      return `<blockquote>${formatInline(body)}</blockquote>`;
+    });
+  text = renderMarkdownLists(text);
+  text = text.split(/\n{2,}/).map((block) => {
+    const trimmed = block.trim();
+    if (!trimmed) return "";
+    if (/^(<h\d|<ul|<ol|<pre|<table|<div|<blockquote|<hr|@@CODEBLOCK)/.test(trimmed)) return trimmed;
+    return `<p>${formatInline(trimmed).replace(/\n/g, "<br>")}</p>`;
+  }).join("");
+  return text.replace(/@@CODEBLOCK(\d+)@@/g, (_, index) => blocks[Number(index)]);
+}
+
+function loadMermaid() {
+  if (!mermaidLoader) {
+    mermaidLoader = import(MERMAID_CDN).then((mod) => {
+      const mermaid = mod.default;
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: state.theme === "light" ? "default" : "dark",
+        securityLevel: "strict",
+        fontFamily: 'Inter, "Microsoft YaHei", sans-serif',
+        themeVariables: state.theme === "light"
+          ? { background: "#ffffff", primaryTextColor: "#1a1c20", lineColor: "#6eae1a" }
+          : { darkMode: true, background: "#111214", primaryTextColor: "#f4f4f5", lineColor: "#b7f34a" },
+      });
+      return mermaid;
+    }).catch((error) => {
+      mermaidLoader = null;
+      throw error;
+    });
+  }
+  return mermaidLoader;
+}
+
+function fitMermaidSvg(node) {
+  const svg = node.querySelector("svg");
+  if (!svg || !svg.viewBox || !svg.viewBox.baseVal) return;
+  const box = svg.viewBox.baseVal;
+  if (!box.width || !box.height) return;
+  svg.removeAttribute("height");
+  svg.setAttribute("width", "100%");
+  svg.style.width = "100%";
+  svg.style.height = "auto";
+  svg.style.aspectRatio = `${box.width} / ${box.height}`;
+}
+
+async function hydrateMermaid(root) {
+  const nodes = [...(root || document).querySelectorAll(".mermaid")].filter((node) => !node.getAttribute("data-processed"));
+  if (!nodes.length) return;
+  try {
+    const mermaid = await loadMermaid();
+    await mermaid.run({ nodes, suppressErrors: true });
+    nodes.forEach(fitMermaidSvg);
+  } catch {
+    nodes.forEach((node) => node.classList.add("mermaid-fallback"));
+  }
 }
 
 function relativeTime(value) {
@@ -148,7 +403,7 @@ function renderSessionList() {
   const query = el("sessionFilter").value.trim().toLowerCase();
   const visible = state.sessions.filter((item) => item.title.toLowerCase().includes(query));
   sessionList.innerHTML = visible.length ? visible.map((item) => `
-    <button class="session-item ${item.session_id === state.activeId ? "active" : ""}" data-session="${item.session_id}">
+    <button class="session-item ${!state.draft && item.session_id === state.activeId ? "active" : ""}" data-session="${item.session_id}">
       ${icons.chat}<strong>${escapeHtml(item.title)}</strong><small>${relativeTime(item.updated_at)}</small>
     </button>
   `).join("") : '<div class="empty-list">还没有对话记录</div>';
@@ -163,12 +418,21 @@ async function refreshSessions() {
   renderSessionList();
 }
 
-async function newSession() {
+function showDraftConversation() {
+  state.activeId = null;
+  state.draft = true;
+  state.currentSession = { session_id: null, title: "新对话", messages: [] };
+  el("chatTitle").textContent = "新对话";
+  welcome.classList.remove("hidden");
+  messages.innerHTML = "";
+  closeArtifactView();
+  syncArtifacts([]);
+  renderSessionList();
+}
+
+function newSession() {
   if (state.sending) return;
-  const session = await api("/api/sessions", { method: "POST", body: "{}" });
-  state.activeId = session.session_id;
-  await refreshSessions();
-  renderConversation(session);
+  showDraftConversation();
   input.focus();
   if (isNarrow("sidebar")) setPanel("sidebar", false);
 }
@@ -178,6 +442,7 @@ async function loadSession(sessionId) {
   try {
     const session = await api(`/api/sessions/${encodeURIComponent(sessionId)}`);
     state.activeId = session.session_id;
+    state.draft = false;
     renderSessionList();
     renderConversation(session);
     if (isNarrow("sidebar")) setPanel("sidebar", false);
@@ -186,6 +451,7 @@ async function loadSession(sessionId) {
 
 function renderConversation(session) {
   state.currentSession = session;
+  state.draft = !session.session_id;
   el("chatTitle").textContent = session.title || "新对话";
   const items = session.messages || [];
   welcome.classList.toggle("hidden", items.length > 0);
@@ -193,6 +459,7 @@ function renderConversation(session) {
   bindArtifactCards();
   closeArtifactView();
   syncArtifacts(items);
+  hydrateMermaid(messages).then(scrollToBottom);
   requestAnimationFrame(scrollToBottom);
 }
 
@@ -280,6 +547,7 @@ async function openArtifact(path) {
     const kind = data.kind === "chart" ? "统计图" : "报告";
     el("artifactMeta").textContent = `${kind} · ${formatSize(data.size)} · ${relativeTime(data.modified_at)}`;
     el("artifactBody").innerHTML = renderMarkdown(data.content);
+    hydrateMermaid(el("artifactBody"));
   } catch (error) {
     el("artifactName").textContent = "读取失败";
     el("artifactBody").innerHTML = `<div class="artifact-loading">${escapeHtml(error.message)}</div>`;
@@ -510,6 +778,38 @@ async function deleteModel(modelId) {
 
 /* ------------------------------------------------------------------ 设置 */
 
+function readTheme() {
+  try {
+    return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+function applyTheme(theme, { persist = true, rerender = false } = {}) {
+  state.theme = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = state.theme;
+  document.documentElement.style.colorScheme = state.theme;
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, state.theme); } catch { /* 隐私模式忽略 */ }
+  }
+  const summary = el("settingsThemeSummary");
+  if (summary) summary.textContent = state.theme === "light" ? "亮色背景" : "深色背景";
+  document.querySelectorAll("[data-theme-option]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.themeOption === state.theme);
+  });
+  mermaidLoader = null;
+  if (rerender && state.currentSession) {
+    const artifact = state.openArtifactPath;
+    renderConversation(state.currentSession);
+    if (artifact) openArtifact(artifact);
+  }
+}
+
+function initTheme() {
+  applyTheme(readTheme(), { persist: false });
+}
+
 function openSettings(page = "home") {
   el("settingsModal").classList.remove("hidden");
   showSettingsPage(page);
@@ -518,11 +818,15 @@ function openSettings(page = "home") {
 function showSettingsPage(page) {
   el("settingsHome").classList.toggle("hidden", page !== "home");
   el("settingsModels").classList.toggle("hidden", page !== "models");
-  el("settingsTitle").textContent = page === "models" ? "模型" : "设置";
+  el("settingsAppearance").classList.toggle("hidden", page !== "appearance");
+  el("settingsTitle").textContent = page === "models" ? "模型" : page === "appearance" ? "外观" : "设置";
   el("settingsSubtitle").textContent = page === "models"
     ? "OpenAI 兼容协议 · 保存在本机数据目录"
-    : "MyFitness Agent · 本地运行";
+    : page === "appearance"
+      ? "背景主题保存在本机浏览器"
+      : "MyFitness Agent · 本地运行";
   if (page === "models") loadModels();
+  if (page === "appearance") applyTheme(state.theme, { persist: false });
 }
 
 /* -------------------------------------------------------------- 定时任务 */
@@ -647,10 +951,175 @@ function showProgress() {
   scrollToBottom();
 }
 
+function updateProgress(text) {
+  const span = document.querySelector("#progressMessage span");
+  if (span && text) span.textContent = text;
+}
+
+function createTypewriter(contentEl) {
+  let shown = "";
+  let queue = "";
+  let timer = 0;
+  let settle = null;
+
+  function paint(streaming) {
+    contentEl.innerHTML = renderMarkdown(shown);
+    contentEl.classList.toggle("streaming", streaming);
+    scrollToBottom();
+  }
+
+  function tick() {
+    timer = 0;
+    if (!queue) {
+      if (settle) {
+        const done = settle;
+        settle = null;
+        done();
+      }
+      return;
+    }
+    const step = queue.length <= 16 ? queue.length : Math.min(8, Math.ceil(queue.length / 18) + 2);
+    shown += queue.slice(0, step);
+    queue = queue.slice(step);
+    paint(true);
+    timer = window.setTimeout(tick, 16);
+  }
+
+  return {
+    push(text) {
+      if (!text) return;
+      queue += text;
+      if (!timer) timer = window.setTimeout(tick, 0);
+    },
+    finish() {
+      if (!queue && !timer) {
+        contentEl.classList.remove("streaming");
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        const prev = settle;
+        settle = () => {
+          if (prev) prev();
+          contentEl.classList.remove("streaming");
+          resolve();
+        };
+        if (!timer) timer = window.setTimeout(tick, 0);
+      });
+    },
+  };
+}
+
+function consumeSse(buffer) {
+  const parts = buffer.split(/\r?\n\r?\n/);
+  const rest = parts.pop() ?? "";
+  const events = [];
+  for (const block of parts) {
+    if (!block.trim()) continue;
+    let event = "message";
+    const dataLines = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+    }
+    if (!dataLines.length) continue;
+    try {
+      events.push({ event, data: JSON.parse(dataLines.join("\n")) });
+    } catch {
+      events.push({ event: "error", data: { error: "流式数据解析失败" } });
+    }
+  }
+  return { events, rest };
+}
+
+function ensureAssistantStream() {
+  el("progressMessage")?.remove();
+  let node = el("streamingMessage");
+  if (node) return node.querySelector(".message-content");
+  messages.insertAdjacentHTML("beforeend", `
+    <article class="message assistant" id="streamingMessage">
+      <div class="message-avatar">${icons.agent}</div>
+      <div class="message-content streaming"></div>
+    </article>`);
+  return el("streamingMessage").querySelector(".message-content");
+}
+
+async function readSessionStream(text) {
+  const response = await fetch("/api/sessions/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: text,
+      ...(state.activeId ? { session_id: state.activeId } : {}),
+    }),
+  });
+  const contentType = response.headers.get("content-type") || "";
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `请求失败 (${response.status})`);
+  }
+  if (!contentType.includes("text/event-stream") || !response.body) {
+    throw new Error("服务器未返回流式响应");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let typewriter = null;
+  let finalPayload = null;
+  let streamError = null;
+
+  const handleEvent = async (event, data) => {
+    if (event === "progress") {
+      updateProgress(data.text);
+      return;
+    }
+    if (event === "session" && data.session_id) {
+      state.activeId = data.session_id;
+      state.draft = false;
+      if (data.title) el("chatTitle").textContent = data.title;
+      refreshSessions().catch(() => {});
+      return;
+    }
+    if (event === "delta") {
+      if (!typewriter) typewriter = createTypewriter(ensureAssistantStream());
+      typewriter.push(data.text || "");
+      return;
+    }
+    if (event === "done") {
+      finalPayload = data;
+      return;
+    }
+    if (event === "error") {
+      streamError = new Error(data.error || "流式输出失败");
+    }
+  };
+
+  while (!streamError) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const consumed = consumeSse(buffer);
+    buffer = consumed.rest;
+    for (const item of consumed.events) {
+      await handleEvent(item.event, item.data || {});
+      if (streamError) break;
+    }
+  }
+  if (buffer.trim() && !streamError) {
+    const consumed = consumeSse(`${buffer}\n\n`);
+    for (const item of consumed.events) {
+      await handleEvent(item.event, item.data || {});
+    }
+  }
+  if (streamError) throw streamError;
+  if (typewriter) await typewriter.finish();
+  if (!finalPayload) throw new Error("会话中断，未收到完整回复");
+  return finalPayload;
+}
+
 async function sendMessage() {
   const text = input.value.trim();
   if (!text || state.sending) return;
-  if (!state.activeId) await newSession();
   state.sending = true;
   sendButton.disabled = true;
   input.value = "";
@@ -659,16 +1128,15 @@ async function sendMessage() {
   messages.insertAdjacentHTML("beforeend", messageHtml({ role: "user", content: text }));
   showProgress();
   try {
-    const result = await api(`/api/sessions/${encodeURIComponent(state.activeId)}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ message: text }),
-    });
+    const result = await readSessionStream(text);
     renderConversation(result);
     await refreshSessions();
   } catch (error) {
     el("progressMessage")?.remove();
+    el("streamingMessage")?.remove();
     messages.insertAdjacentHTML("beforeend", `<article class="message assistant"><div class="message-avatar">!</div><div class="message-content"><p>处理失败：${escapeHtml(error.message)}</p></div></article>`);
     showToast(error.message);
+    if (state.draft) state.activeId = null;
   } finally {
     state.sending = false;
     sendButton.disabled = false;
@@ -730,9 +1198,14 @@ function bindEvents() {
   el("settingsModal").addEventListener("click", (event) => {
     if (event.target === el("settingsModal")) el("settingsModal").classList.add("hidden");
   });
-  el("settingsBack").addEventListener("click", () => showSettingsPage("home"));
+  document.querySelectorAll(".settings-back").forEach((button) => {
+    button.addEventListener("click", () => showSettingsPage("home"));
+  });
   el("settingsHome").querySelectorAll("[data-settings-page]").forEach((button) => {
     button.addEventListener("click", () => showSettingsPage(button.dataset.settingsPage));
+  });
+  el("settingsAppearance").querySelectorAll("[data-theme-option]").forEach((button) => {
+    button.addEventListener("click", () => applyTheme(button.dataset.themeOption, { rerender: true }));
   });
   el("modelForm").addEventListener("submit", submitModelForm);
   el("modelFormTest").addEventListener("click", testModelConnection);
@@ -745,7 +1218,7 @@ function bindEvents() {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); newSession(); }
     if (event.key !== "Escape") return;
     if (!el("settingsModal").classList.contains("hidden")) {
-      if (!el("settingsModels").classList.contains("hidden")) showSettingsPage("home");
+      if (el("settingsHome").classList.contains("hidden")) showSettingsPage("home");
       else el("settingsModal").classList.add("hidden");
       return;
     }
@@ -754,6 +1227,7 @@ function bindEvents() {
 }
 
 async function init() {
+  initTheme();
   initLayout();
   bindEvents();
   resetModelForm();
@@ -762,8 +1236,8 @@ async function init() {
     await api("/api/health");
     el("connectionStatus").textContent = "已连接 · JSON 持久化";
     await Promise.all([refreshSessions(), loadTasks(false), loadModels()]);
-    if (state.sessions.length) await loadSession(state.sessions[0].session_id);
-    else await newSession();
+    showDraftConversation();
+    input.focus();
   } catch (error) {
     el("connectionStatus").textContent = "连接失败";
     showToast(error.message);

@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     chat_history_dir: str = ""
 
     log_level: str = "INFO"
+    debug_mode: bool = False
     default_user_id: int = 1
 
     sync_default_days: int = 90

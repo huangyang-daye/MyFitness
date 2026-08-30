@@ -7,6 +7,7 @@ import logging
 import re
 import threading
 import webbrowser
+from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,7 +22,12 @@ from myfitness.chat_history import (
 from myfitness.config import get_settings
 from myfitness.db.repositories.reports import ScheduledTaskRepository
 from myfitness.db.session import get_or_create_default_user, session_scope
-from myfitness.graph.chat import new_chat_state, run_chat_turn
+from myfitness.graph.chat import (
+    finalize_streamed_reply,
+    iter_chat_turn,
+    new_chat_state,
+    run_chat_turn,
+)
 from myfitness.llm.factory import LlmConfig, probe_llm_config
 from myfitness.llm.registry import ModelRegistryError, get_registry
 from myfitness.paths import PROJECT_ROOT
@@ -43,10 +49,15 @@ class ScheduledTaskNotFound(ValueError):
 class AgentWebApplication:
     """Small application layer shared by the HTTP handler and tests."""
 
-    def __init__(self, project_root: str | Path = PROJECT_ROOT) -> None:
+    def __init__(
+        self,
+        project_root: str | Path = PROJECT_ROOT,
+        *,
+        history_dir: str | Path | None = None,
+    ) -> None:
         self.project_root = Path(project_root).resolve()
         # 对话记录是运行时数据，落在 <DATA_DIR>/chat-history，不占用项目目录
-        self.history = ChatHistoryStore()
+        self.history = ChatHistoryStore(history_dir)
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
@@ -145,12 +156,7 @@ class AgentWebApplication:
         }
 
     def send_message(self, session_id: str, message: str) -> dict[str, Any]:
-        text = str(message).strip()
-        if not text:
-            raise ValueError("消息不能为空")
-        if len(text) > 20_000:
-            raise ValueError("消息不能超过 20000 个字符")
-
+        text = self._validated_message(message)
         lock = self._lock_for(session_id)
         with lock:
             state = self.history.load(session_id)
@@ -162,6 +168,72 @@ class AgentWebApplication:
             payload = self.session_payload(state.session_id)
             payload.update({"reply": state.reply, "progress": progress})
             return payload
+
+    def stream_message(
+        self,
+        session_id: str | None,
+        message: str,
+        emit: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """处理一轮对话并通过回调推送 SSE 事件。
+
+        未提供 session_id 时先在内存中创建会话，等本轮用户消息写入后再注册到
+        历史仓库，避免打开空白页就落下一个空会话文件。
+        """
+        text = self._validated_message(message)
+        created = not session_id
+        if created:
+            settings = get_settings()
+            state = new_chat_state(user_id=settings.default_user_id)
+            canonical = state.session_id
+        else:
+            canonical = self.history.normalize_session_id(str(session_id))
+            state = None
+
+        def emit_event(event: str, payload: dict[str, Any]) -> None:
+            if emit is not None:
+                emit(event, payload)
+
+        lock = self._lock_for(canonical)
+        with lock:
+            if not created:
+                state = self.history.load(canonical)
+            assert state is not None
+            progress: list[str] = []
+
+            def on_progress(msg: str) -> None:
+                progress.append(msg)
+                emit_event("progress", {"text": msg})
+
+            with session_scope() as session:
+                get_or_create_default_user(session, state.user_id)
+                state, chunks = iter_chat_turn(
+                    session, state, text, on_progress=on_progress
+                )
+                # 首轮用户消息已经写入 state，此时才落盘并出现在侧栏。
+                self.history.save(state)
+                emit_event("session", self.session_payload(state.session_id))
+                reply_parts: list[str] = []
+                for chunk in chunks:
+                    if not chunk:
+                        continue
+                    reply_parts.append(chunk)
+                    emit_event("delta", {"text": chunk})
+                finalize_streamed_reply(state, "".join(reply_parts))
+            self.history.save(state)
+            payload = self.session_payload(state.session_id)
+            payload.update({"reply": state.reply, "progress": progress})
+            emit_event("done", payload)
+            return payload
+
+    @staticmethod
+    def _validated_message(message: str) -> str:
+        text = str(message).strip()
+        if not text:
+            raise ValueError("消息不能为空")
+        if len(text) > 20_000:
+            raise ValueError("消息不能超过 20000 个字符")
+        return text
 
     # ------------------------------------------------------------------- 产物
     def read_artifact_file(self, path: str) -> dict[str, Any]:
@@ -302,6 +374,11 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if parsed.path == "/api/sessions/stream":
+                body = self._read_json()
+                session_id = str(body.get("session_id") or "").strip() or None
+                self._stream_message(session_id, body.get("message", ""))
+                return
             if parsed.path == "/api/sessions":
                 self._json(self.server.app.create_session(), status=HTTPStatus.CREATED)
                 return
@@ -382,6 +459,39 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(data)
+
+    def _stream_message(self, session_id: str | None, message: str) -> None:
+        try:
+            self.server.app._validated_message(message)
+        except Exception as exc:  # noqa: BLE001 - HTTP exception boundary
+            self._handle_error(exc)
+            return
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            self.server.app.stream_message(session_id, message, emit=self._write_sse)
+        except Exception as exc:
+            logger.exception("Agent UI stream failed")
+            error = str(exc) if isinstance(
+                exc, (ChatHistoryError, ArtifactError, ValueError)
+            ) else "请求处理失败，请查看服务端日志"
+            try:
+                self._write_sse("error", {"error": error})
+            except Exception:
+                logger.debug("无法写入 SSE 错误事件", exc_info=True)
+
+    def _write_sse(self, event: str, payload: dict[str, Any]) -> None:
+        data = json.dumps(payload, ensure_ascii=False)
+        frame = f"event: {event}\ndata: {data}\n\n".encode()
+        self.wfile.write(frame)
+        self.wfile.flush()
 
     def _json(self, payload: Any, *, status: HTTPStatus = HTTPStatus.OK) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")

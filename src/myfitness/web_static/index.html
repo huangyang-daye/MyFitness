@@ -3,8 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
     <title>MyFitness Agent</title>
+    <script>
+      try {
+        var theme = localStorage.getItem("myfitness.theme") === "light" ? "light" : "dark";
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+      } catch (e) {}
+    </script>
     <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
@@ -187,10 +194,20 @@
               </span>
               <span class="settings-entry-arrow">›</span>
             </button>
+            <button class="settings-entry" data-settings-page="appearance">
+              <span class="settings-entry-icon">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 0 0 16z" /></svg>
+              </span>
+              <span class="settings-entry-copy">
+                <strong>外观</strong>
+                <small id="settingsThemeSummary">深色</small>
+              </span>
+              <span class="settings-entry-arrow">›</span>
+            </button>
           </section>
 
           <section class="settings-page hidden" id="settingsModels">
-            <button class="settings-back" id="settingsBack">← 返回设置</button>
+            <button class="settings-back" type="button">← 返回设置</button>
             <h3>模型</h3>
             <p class="settings-hint">
               按 OpenAI 兼容协议填写，任意提供 <code>/v1/chat/completions</code> 的服务都能接入。
@@ -239,6 +256,24 @@
                 <button type="submit" class="primary-button" id="modelFormSave">保存模型</button>
               </div>
             </form>
+          </section>
+
+          <section class="settings-page hidden" id="settingsAppearance">
+            <button class="settings-back" type="button">← 返回设置</button>
+            <h3>外观</h3>
+            <p class="settings-hint">选择界面背景主题。设置保存在本机浏览器，不会同步到服务器。</p>
+            <div class="theme-grid">
+              <button type="button" class="theme-card" data-theme-option="dark">
+                <span class="theme-preview theme-preview-dark" aria-hidden="true"></span>
+                <strong>深色</strong>
+                <small>深色背景，适合夜间使用</small>
+              </button>
+              <button type="button" class="theme-card" data-theme-option="light">
+                <span class="theme-preview theme-preview-light" aria-hidden="true"></span>
+                <strong>亮色</strong>
+                <small>浅色背景，适合日间阅读</small>
+              </button>
+            </div>
           </section>
         </div>
       </section>

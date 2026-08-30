@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from myfitness.debug import trace_agent
 from myfitness.schemas.agent_outputs import (
     BodyAgentOutput,
     BodyTrend,
@@ -13,6 +14,7 @@ from myfitness.schemas.agent_outputs import (
 from myfitness.schemas.state import ContextSnapshot
 
 
+@trace_agent("BodyMonitorAgent")
 def run_body_agent(context: ContextSnapshot, analysis_date: date | None = None) -> BodyAgentOutput:
     analysis_date = analysis_date or context.date_range.end
     summary = context.body_metrics_summary

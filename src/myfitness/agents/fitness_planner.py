@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from myfitness.debug import trace_agent
 from myfitness.schemas.agent_outputs import (
     FitnessAgentOutput,
     RecentTrainingSummary,
@@ -14,6 +15,7 @@ from myfitness.schemas.state import ContextSnapshot
 from myfitness.xunji.parsers.training import format_training_session
 
 
+@trace_agent("FitnessPlannerAgent")
 def run_fitness_agent(
     context: ContextSnapshot, analysis_date: date | None = None
 ) -> FitnessAgentOutput:
@@ -39,7 +41,7 @@ def run_fitness_agent(
     recovery = "unknown"
     if recent.sessions_last_7d >= 5:
         recovery = "moderate_fatigue"
-    elif recent.sessions_last_7d >= 1:
+    elif recent.sessions_last_7d >= 1:  # noqa: SIM114 - keep explicit recovery branches
         recovery = "well_recovered"
     elif recent.sessions_last_7d == 0:
         recovery = "well_recovered"
