@@ -9,9 +9,12 @@ from datetime import date, timedelta
 from myfitness.schemas.state import Intent
 
 _RECENT_DAYS_RE = re.compile(r"最?\s*近\s*(\d+)\s*天")
+# 「最近N天 / 过去N天 / 前N天」——要求含数字，避免误吞「前天」
+_PAST_DAYS_RE = re.compile(r"(?:最?\s*近|过[去了]?|前)\s*(\d+)\s*天")
 _ISO_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 _CN_MD_RE = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日?")
 _DOT_MD_RE = re.compile(r"(?<!\d)(\d{1,2})[./](\d{1,2})(?!\d)")
+_RANGE_CONNECTOR_RE = re.compile(r"(?:到|至|~|～|-|—|–)")
 BODY_KEYWORDS = ("体重", "体脂", "围度", "公斤", "kg")
 NUTRITION_KEYWORDS = ("蛋白", "热量", "饮食", "吃了", "吃", "餐", "kcal", "卡路里", "碳水", "脂肪", "营养")
 TRAINING_KEYWORDS = ("训练", "练", "卧推", "深蹲", "硬拉", "动作", "组", "健身")
@@ -103,6 +106,72 @@ def parse_single_date(
     return default
 
 
+def parse_date_range_text(
+    message: str,
+    today: date | None = None,
+) -> tuple[date | None, date | None]:
+    """从消息解析**连续日期区间**（周期报表 / 趋势图用）。
+
+    优先级：
+    1. 显式日期区间（「8月20日到8月25日」「2026-08-20~2026-08-25」）；
+    2. 多个离散日期（「8月20号和25号」）→ 取最早到最晚；
+    3. 最近/过去/前 N 天 → 含今天的 N 天；
+    4. 单日（今天/昨天/8月24日）→ start == end；
+    5. 都没有 → (None, None)。
+    """
+    today = today or date.today()
+    tokens = list(_iter_date_tokens(message, today))
+
+    if len(tokens) >= 2:
+        start, end = tokens[0][2], tokens[-1][2]
+        if start > end:
+            start, end = end, start
+        return start, end
+
+    if len(tokens) == 1:
+        single = tokens[0][2]
+        return single, single
+
+    if m := _PAST_DAYS_RE.search(message):
+        days = max(int(m.group(1)), 1)
+        return today - timedelta(days=days - 1), today
+
+    return None, None
+
+
+def _iter_date_tokens(message: str, today: date) -> list[tuple[int, int, date]]:
+    """按出现顺序提取消息中的日期（ISO / N月N日 / M.D），返回 (起始位置, 结束位置, 日期)。"""
+    found: list[tuple[int, int, date]] = []
+
+    def add(start: int, end: int, value: date) -> None:
+        if not any(f[2] == value for f in found):
+            found.append((start, end, value))
+
+    for m in _ISO_DATE_RE.finditer(message):
+        try:
+            add(m.start(), m.end(), date.fromisoformat(m.group(1)))
+        except ValueError:
+            continue
+
+    for m in _CN_MD_RE.finditer(message):
+        try:
+            add(m.start(), m.end(), _resolve_month_day(int(m.group(1)), int(m.group(2)), today))
+        except ValueError:
+            continue
+
+    for m in _DOT_MD_RE.finditer(message):
+        month, day = int(m.group(1)), int(m.group(2))
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            continue
+        try:
+            add(m.start(), m.end(), _resolve_month_day(month, day, today))
+        except ValueError:
+            continue
+
+    found.sort(key=lambda t: t[0])
+    return found
+
+
 def _resolve_month_day(month: int, day: int, today: date) -> date:
     year = today.year
     try:
@@ -156,7 +225,7 @@ def _infer_domains(message: str, intent: Intent, domain: str | None) -> tuple[st
 def _infer_metric_type(message: str) -> str | None:
     if "体脂" in message:
         return "bodyfat"
-    if "体重" in message or re.search(r"\d+\s*(?:kg|公斤)", message, re.I):
+    if "体重" in message or re.search(r"\d+\s*(?:kg|公斤)", message, re.IGNORECASE):
         return "weight"
     return None
 

@@ -96,6 +96,8 @@ def _build_narrative(context: ContextSnapshot, recent: RecentTrainingSummary) ->
                 lines.append(f"- {s['date']} {s.get('title') or '训练'}: {names}")
         return "\n".join(lines)
 
+    # 文案中的天数跟随观察期（周期报表可能是 7/30 天，日报默认 30 天）
+    days = (context.date_range.end - context.date_range.start).days + 1
     if recent.sessions_last_7d:
-        return f"近 7 天完成 {recent.sessions_last_7d} 次训练。"
-    return "近 7 天暂无训练记录。"
+        return f"近 {days} 天完成 {recent.sessions_last_7d} 次训练。"
+    return f"近 {days} 天暂无训练记录。"

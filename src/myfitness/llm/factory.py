@@ -10,6 +10,7 @@ import httpx
 
 from myfitness.config import Settings, get_settings
 from myfitness.llm.guard import get_llm_guard
+from myfitness.llm.registry import get_active_preset
 
 logger = logging.getLogger(__name__)
 
@@ -62,15 +63,37 @@ class LlmConfig:
         return f"****{self.api_key[-4:]}"
 
 
+def preset_llm_config(preset: Any) -> LlmConfig | None:
+    """把用户在前端选择的模型预设转成 LlmConfig；不可用（缺 key/模型）时返回 None。"""
+    if preset is None or not preset.api_key or not preset.model:
+        return None
+    return LlmConfig(
+        base_url=str(preset.base_url).rstrip("/"),
+        api_key=preset.api_key,
+        model=preset.model,
+        temperature=preset.temperature,
+        max_tokens=None,
+        timeout=preset.timeout,
+    )
+
+
 def get_llm_config(settings: Settings | None = None) -> LlmConfig:
+    # 未显式传入 settings 时走运行时口径：前端选中的模型优先，其次 .env。
+    # 显式传入 settings 则以传入配置为准（保持对该参数的既有语义）。
+    if settings is None:
+        preset_config = preset_llm_config(get_active_preset())
+        if preset_config is not None:
+            return preset_config
+
     s = settings or get_settings()
     api_key = s.resolved_llm_api_key()
     if not api_key:
         raise ValueError(
-            "LLM 未配置：请在 .env 中设置 LLM_API_KEY（或 OPENAI_API_KEY）"
+            "LLM 未配置：请在 .env 中设置 LLM_API_KEY（或 OPENAI_API_KEY），"
+            "或在界面「设置 → 模型」中添加模型"
         )
     if not s.llm_model:
-        raise ValueError("LLM 未配置：请在 .env 中设置 LLM_MODEL")
+        raise ValueError("LLM 未配置：请在 .env 中设置 LLM_MODEL，或在界面「设置 → 模型」中添加模型")
 
     return LlmConfig(
         base_url=s.llm_base_url.rstrip("/"),
@@ -83,6 +106,10 @@ def get_llm_config(settings: Settings | None = None) -> LlmConfig:
 
 
 def is_llm_configured(settings: Settings | None = None) -> bool:
+    # 显式传入 settings 时只判断该配置本身（保持纯函数语义）；
+    # 无参调用走运行时口径：前端选中的模型优先，其次 .env。
+    if settings is None and preset_llm_config(get_active_preset()) is not None:
+        return True
     s = settings or get_settings()
     return bool(s.resolved_llm_api_key() and s.llm_model)
 
@@ -178,12 +205,8 @@ def _probe_quick(cfg: LlmConfig, timeout: int) -> None:
         response.raise_for_status()
 
 
-def probe_llm_connection(
-    prompt: str = "回复 OK",
-    settings: Settings | None = None,
-) -> dict[str, Any]:
-    """通过 OpenAI 兼容 /chat/completions 探测 LLM 连通性（不依赖 LangChain）。"""
-    cfg = get_llm_config(settings)
+def probe_llm_config(cfg: LlmConfig, prompt: str = "回复 OK") -> dict[str, Any]:
+    """对任意一组 OpenAI 兼容配置做连通性探测（不依赖 LangChain、不落盘）。"""
     payload: dict[str, Any] = {
         "model": cfg.model,
         "messages": [{"role": "user", "content": prompt}],
@@ -197,10 +220,12 @@ def probe_llm_connection(
         "Content-Type": "application/json",
     }
 
+    started = _time.monotonic()
     with httpx.Client(timeout=float(cfg.timeout)) as client:
         response = client.post(cfg.chat_completions_url, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
+    elapsed_ms = int((_time.monotonic() - started) * 1000)
 
     content = ""
     choices = data.get("choices") or []
@@ -214,7 +239,16 @@ def probe_llm_connection(
         "base_url": cfg.base_url,
         "reply": content.strip(),
         "usage": usage,
+        "latency_ms": elapsed_ms,
     }
+
+
+def probe_llm_connection(
+    prompt: str = "回复 OK",
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """通过 OpenAI 兼容 /chat/completions 探测当前生效配置的连通性。"""
+    return probe_llm_config(get_llm_config(settings), prompt)
 
 
 def chat_completion(

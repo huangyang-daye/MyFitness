@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from myfitness.agents.tools.base import invoke_tool
 from myfitness.agents.tools.query_format import format_query_results
 from myfitness.agents.tools.query_tools import query_training_logs
 from myfitness.db.models import Base, TrainingLog, User
@@ -105,7 +106,7 @@ def test_query_training_logs_parses_raw_payload(db_session):
     )
     db_session.flush()
 
-    result = query_training_logs(db_session, 1, date(2026, 8, 21), date(2026, 8, 21))
+    result = invoke_tool(query_training_logs, db_session, 1, start_date=date(2026, 8, 21), end_date=date(2026, 8, 21))
     assert result["count"] == 1
     session = result["sessions"][0]
     assert session["title"] == "腿臀"

@@ -1,12 +1,19 @@
-"""数据库查询 Tool — 按日期范围读取 body / nutrition / training 明细。"""
+"""数据库查询 Tool — 按日期范围读取 body / nutrition / training 明细。
+
+全部函数均用 LangChain `@tool` 修饰（详见 `base.py` 的调用约定）。
+`session` / `user_id` 通过 `InjectedToolArg` 注入，不会进入 LLM 入参模式。
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date
+from typing import Annotated
 
+from langchain_core.tools import InjectedToolArg, tool
 from sqlalchemy.orm import Session
 
+from myfitness.agents.tools.base import invoke_tool
 from myfitness.db.repositories.metrics import (
     BodyMetricRepository,
     NutritionLogRepository,
@@ -15,13 +22,21 @@ from myfitness.db.repositories.metrics import (
 from myfitness.xunji.parsers.training import parse_training_payload
 
 
+@tool
 def query_body_metrics(
-    session: Session,
-    user_id: int,
+    session: Annotated[Session, InjectedToolArg],
+    user_id: Annotated[int, InjectedToolArg],
     start_date: date,
     end_date: date,
     metric_type: str | None = None,
 ) -> dict:
+    """查询指定日期范围内用户的身体指标记录（体重 / 体脂 / 各围度等）。
+
+    Args:
+        start_date: 起始日期（含），ISO 格式 YYYY-MM-DD。
+        end_date: 结束日期（含），ISO 格式 YYYY-MM-DD。
+        metric_type: 指标类型，如 weight / bodyfat / weist；为空返回全部类型。
+    """
     repo = BodyMetricRepository(session, user_id)
     records = repo.query_range(start_date, end_date, metric_type)
     return {
@@ -43,13 +58,21 @@ def query_body_metrics(
     }
 
 
+@tool
 def query_nutrition_logs(
-    session: Session,
-    user_id: int,
+    session: Annotated[Session, InjectedToolArg],
+    user_id: Annotated[int, InjectedToolArg],
     start_date: date,
     end_date: date,
     meal_type: str | None = None,
 ) -> dict:
+    """查询指定日期范围内的饮食记录，并按日汇总热量 / 蛋白 / 碳水 / 脂肪。
+
+    Args:
+        start_date: 起始日期（含），ISO 格式 YYYY-MM-DD。
+        end_date: 结束日期（含），ISO 格式 YYYY-MM-DD。
+        meal_type: 餐型过滤，如 早餐 / 午餐 / 晚餐 / 加餐；为空返回全部。
+    """
     repo = NutritionLogRepository(session, user_id)
     records = repo.query_range(start_date, end_date)
     if meal_type:
@@ -94,12 +117,19 @@ def query_nutrition_logs(
     }
 
 
+@tool
 def query_training_logs(
-    session: Session,
-    user_id: int,
+    session: Annotated[Session, InjectedToolArg],
+    user_id: Annotated[int, InjectedToolArg],
     start_date: date,
     end_date: date,
 ) -> dict:
+    """查询指定日期范围内的训练记录（动作、组数、容量、消耗等）。
+
+    Args:
+        start_date: 起始日期（含），ISO 格式 YYYY-MM-DD。
+        end_date: 结束日期（含），ISO 格式 YYYY-MM-DD。
+    """
     repo = TrainingLogRepository(session, user_id)
     records = repo.query_range(start_date, end_date)
     sessions: list[dict] = []
@@ -110,7 +140,8 @@ def query_training_logs(
             sessions.append(
                 {
                     "date": log.record_date.isoformat(),
-                    "title": parsed.get("title") or log.title,
+                    # raw_payload 缺 title 时回退 DB 列，避免统一显示「训练」
+                    "title": payload.get("title") or log.title or parsed.get("title"),
                     "source": log.source,
                     "localid": parsed.get("localid") or log.xunji_localid,
                     "duration_minutes": parsed.get("duration_minutes"),
@@ -147,31 +178,52 @@ def query_training_logs(
     }
 
 
+@tool
 def execute_query_plan(
-    session: Session,
-    user_id: int,
+    session: Annotated[Session, InjectedToolArg],
+    user_id: Annotated[int, InjectedToolArg],
     domains: list[str],
     start_date: date,
     end_date: date,
     metric_type: str | None = None,
     meal_type: str | None = None,
-    on_progress: Callable[[str], None] | None = None,
+    on_progress: Annotated[Callable | None, InjectedToolArg] = None,
 ) -> dict[str, dict]:
-    """按查询计划执行一个或多个 domain 的 DB 查询。"""
+    """按查询计划一次性执行一个或多个 domain（body / nutrition / training）的 DB 查询。
+
+    Args:
+        domains: 要查询的域列表，如 ["body", "training"]。
+        start_date: 起始日期（含），ISO 格式 YYYY-MM-DD。
+        end_date: 结束日期（含），ISO 格式 YYYY-MM-DD。
+        metric_type: 身体指标过滤，透传给 body 查询。
+        meal_type: 餐型过滤，透传给 nutrition 查询。
+    """
     from myfitness.graph.progress import emit, label_for
 
     results: dict[str, dict] = {}
     if "body" in domains:
         emit(on_progress, f"{label_for('query_body_metrics')}…")
-        results["body"] = query_body_metrics(
-            session, user_id, start_date, end_date, metric_type=metric_type
+        results["body"] = invoke_tool(
+            query_body_metrics,
+            session,
+            user_id,
+            start_date=start_date,
+            end_date=end_date,
+            metric_type=metric_type,
         )
     if "nutrition" in domains:
         emit(on_progress, f"{label_for('query_nutrition_logs')}…")
-        results["nutrition"] = query_nutrition_logs(
-            session, user_id, start_date, end_date, meal_type=meal_type
+        results["nutrition"] = invoke_tool(
+            query_nutrition_logs,
+            session,
+            user_id,
+            start_date=start_date,
+            end_date=end_date,
+            meal_type=meal_type,
         )
     if "training" in domains or "fitness" in domains:
         emit(on_progress, f"{label_for('query_training_logs')}…")
-        results["training"] = query_training_logs(session, user_id, start_date, end_date)
+        results["training"] = invoke_tool(
+            query_training_logs, session, user_id, start_date=start_date, end_date=end_date
+        )
     return results

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from myfitness.agents.tools.base import invoke_tool
 from myfitness.agents.tools.query_planner import QueryPlan, build_query_plan
 from myfitness.agents.tools.query_tools import execute_query_plan
 from myfitness.graph.progress import ProgressCallback, emit, label_for
@@ -25,12 +26,13 @@ def load_context_for_turn(
     plan = plan or build_query_plan(message, intent, domain)
 
     if plan:
-        query_results = execute_query_plan(
+        query_results = invoke_tool(
+            execute_query_plan,
             session,
             user_id,
-            list(plan.domains),
-            plan.start_date,
-            plan.end_date,
+            domains=list(plan.domains),
+            start_date=plan.start_date,
+            end_date=plan.end_date,
             metric_type=plan.metric_type,
             meal_type=plan.meal_type,
             on_progress=on_progress,

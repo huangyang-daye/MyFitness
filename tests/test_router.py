@@ -181,3 +181,80 @@ def test_classify_llm_missing_dates_filled_by_keyword():
     assert result.intents == [Intent.SYNC_TRIGGER]
     assert result.start_date == today
     assert result.end_date == today
+
+
+# --- 多日期点：修复「同步昨天和今天」只同步当天的问题 ---
+
+
+def test_router_sync_yesterday_and_today_range():
+    today = date(2026, 8, 27)
+    result = classify_intent("同步昨天和今天的数据", use_llm=False, today=today)
+    assert result.intents == [Intent.SYNC_TRIGGER]
+    assert result.start_date == date(2026, 8, 26)
+    assert result.end_date == today
+
+
+def test_router_sync_today_and_yesterday_range_order_independent():
+    today = date(2026, 8, 27)
+    result = classify_intent("同步今天和昨天的数据", use_llm=False, today=today)
+    assert result.start_date == date(2026, 8, 26)
+    assert result.end_date == today
+
+
+def test_router_sync_day_before_yesterday_and_yesterday_range():
+    today = date(2026, 8, 27)
+    result = classify_intent("同步前天和昨天的数据", use_llm=False, today=today)
+    assert result.start_date == date(2026, 8, 25)
+    assert result.end_date == date(2026, 8, 26)
+
+
+def test_router_sync_two_explicit_dates_range():
+    today = date(2026, 8, 27)
+    result = classify_intent("同步8月20号和8月25号的数据", use_llm=False, today=today)
+    assert result.start_date == date(2026, 8, 20)
+    assert result.end_date == date(2026, 8, 25)
+
+
+def test_router_sync_recent_days_with_today_still_full_range():
+    today = date(2026, 8, 27)
+    result = classify_intent("同步最近7天和今天的数据", use_llm=False, today=today)
+    assert result.start_date == date(2026, 8, 21)
+    assert result.end_date == today
+
+
+def test_classify_llm_narrow_range_widened_by_keyword_superset():
+    """LLM 把「昨天和今天」只收敛成今天时，关键词超集范围将其拓宽到含昨天。
+
+    模拟 LLM 漏掉昨天（只返回今天），验证 reconcile 会采用关键词的更宽范围。
+    """
+    today = date(2026, 8, 27)
+    llm_route = RouteResult(  # LLM 只给今天
+        intents=[Intent.SYNC_TRIGGER],
+        start_date=today,
+        end_date=today,
+    )
+    with patch(
+        "myfitness.agents.intent_agent.run_intent_agent", return_value=llm_route
+    ):
+        result = classify_intent("同步昨天和今天的数据", use_llm=True, today=today)
+
+    assert result.intents == [Intent.SYNC_TRIGGER]
+    assert result.start_date == date(2026, 8, 26)
+    assert result.end_date == today
+
+
+def test_classify_llm_range_not_narrowed_by_keyword_subset():
+    """LLM 给出正确更宽范围时，关键词的较窄范围不应覆盖它。"""
+    today = date(2026, 8, 27)
+    llm_route = RouteResult(  # LLM 正确给出两天
+        intents=[Intent.SYNC_TRIGGER],
+        start_date=date(2026, 8, 26),
+        end_date=today,
+    )
+    with patch(
+        "myfitness.agents.intent_agent.run_intent_agent", return_value=llm_route
+    ):
+        result = classify_intent("同步昨天和今天的数据", use_llm=True, today=today)
+
+    assert result.start_date == date(2026, 8, 26)
+    assert result.end_date == today

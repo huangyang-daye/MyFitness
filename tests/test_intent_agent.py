@@ -171,3 +171,24 @@ def test_parse_duplicate_intents_deduped():
     route = parse_agent_response(payload, today=TODAY)
     assert route is not None
     assert route.intents == [Intent.SYNC_TRIGGER]
+
+
+def test_parse_multi_date_point_range():
+    """一个消息含多个日期点（昨天和今天）→ date_range 取最早到最晚。"""
+    payload = (
+        '{"intents": ["sync_trigger"], "domain": null, '
+        '"date_range": {"start": "2026-08-23", "end": "2026-08-24"}, '
+        '"reasoning": "同步昨天与今天两天"}'
+    )
+    route = parse_agent_response(payload, today=TODAY)
+    assert route is not None
+    assert route.intents == [Intent.SYNC_TRIGGER]
+    assert route.start_date == date(2026, 8, 23)
+    assert route.end_date == date(2026, 8, 24)
+
+
+def test_system_prompt_teaches_multi_date_points():
+    """系统提示词明确要求把「昨天和今天」这类多日期点展开为连续范围。"""
+    prompt = build_system_prompt(TODAY)
+    assert "昨天和今天" in prompt
+    assert "最早" in prompt and "最晚" in prompt

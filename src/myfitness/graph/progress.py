@@ -29,6 +29,8 @@ TOOL_LABELS: dict[str, str] = {
     "sync": "同步训记数据",
     "schedule": "管理定时任务",
     "daily_report": "生成日报",
+    "period_report": "生成周期报表",
+    "chart": "生成统计图",
 }
 
 

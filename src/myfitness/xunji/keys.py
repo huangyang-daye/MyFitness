@@ -3,9 +3,10 @@
 from dataclasses import dataclass
 
 from myfitness.config import Settings, get_settings
+from myfitness.paths import PROJECT_ROOT
 from myfitness.xunji.common import mask_api_key
 from myfitness.xunji.skill_keys import key_source, resolve_xunji_keys
-from myfitness.xunji.skills import PROJECT_ROOT, SKILL_DOC_PATHS, SKILL_BODY, SKILL_FOOD, SKILL_TRAINING
+from myfitness.xunji.skills import SKILL_BODY, SKILL_DOC_PATHS, SKILL_FOOD, SKILL_TRAINING
 
 SKILL_NAMES = {
     "body": SKILL_BODY,

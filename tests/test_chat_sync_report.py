@@ -62,6 +62,26 @@ def test_chat_sync_without_date_keeps_default_days(db_session):
     assert sync_mock.call_args.kwargs.get("days") == 7
 
 
+def test_chat_sync_failed_status_is_not_reported_as_complete(db_session):
+    state = new_chat_state(user_id=1)
+    with (
+        patch("myfitness.graph.chat.is_llm_configured", return_value=False),
+        patch("myfitness.graph.chat.run_sync") as sync_mock,
+    ):
+        sync_mock.return_value = {
+            "status": "failed",
+            "start_date": "2026-08-24",
+            "end_date": "2026-08-30",
+            "results": {},
+            "errors": ["body: 当前进程没有外网套接字访问权限（WinError 10013）。"],
+        }
+        state = run_chat_turn(db_session, state, "帮我同步训记数据")
+
+    assert "同步失败" in state.reply
+    assert "WinError 10013" in state.reply
+    assert "同步完成" not in state.reply
+
+
 def test_chat_sync_and_report_combo_syncs_first(db_session):
     """「同步8月24日数据并生成日报」先同步该日数据，再生成该日日报。"""
     state = new_chat_state(user_id=1)

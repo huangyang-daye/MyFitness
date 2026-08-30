@@ -25,6 +25,7 @@ class Intent(StrEnum):
     SYNC_TRIGGER = "sync_trigger"
     SCHEDULE_MANAGE = "schedule_manage"
     REPORT_TRIGGER = "report_trigger"
+    CHART_TRIGGER = "chart_trigger"
     GENERAL = "general"
     CONFIRMATION_RESPONSE = "confirmation_response"
 
@@ -80,10 +81,25 @@ class RouteResult:
         )
 
 
+class Artifact(BaseModel):
+    """会话产物 — 对话过程中生成并落盘的文件（报告、统计图文档等）。
+
+    path 是绝对路径；读取前必须校验落在 data_dir 之内（见 services/artifacts.py）。
+    """
+
+    id: str
+    kind: str = "report"  # report | chart
+    title: str = ""
+    subtitle: str = ""  # 日期 / 周期 / 指标说明
+    path: str = ""
+    created_at: datetime | None = None
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
     timestamp: datetime | None = None
+    artifacts: list[Artifact] = Field(default_factory=list)
 
 
 class DateRange(BaseModel):
@@ -133,6 +149,8 @@ class MyFitnessGraphState(BaseModel):
     errors: list[str] = Field(default_factory=list)
     metadata: GraphMetadata = Field(default_factory=GraphMetadata)
     reply: str = ""
+    # 本轮产生的产物缓冲区：_append_assistant 挂到消息上后清空
+    pending_artifacts: list[Artifact] = Field(default_factory=list)
 
     model_config = {"extra": "ignore"}
 

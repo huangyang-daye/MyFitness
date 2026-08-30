@@ -20,8 +20,12 @@ def run_summary_agent(
     intent: Intent,
     user_message: str = "",
     output_type: str = "chat_reply",
+    *,
+    include_query_results: bool = True,
 ) -> SummaryAgentOutput:
-    content_md = build_rule_based_summary(agent_outputs, context, intent)
+    content_md = build_rule_based_summary(
+        agent_outputs, context, intent, include_query_results=include_query_results
+    )
     return SummaryAgentOutput(
         output_type=output_type,  # type: ignore[arg-type]
         content_md=content_md,
@@ -34,7 +38,14 @@ def build_rule_based_summary(
     agent_outputs: AgentOutputs,
     context: ContextSnapshot | None,
     intent: Intent,
+    *,
+    include_query_results: bool = True,
 ) -> str:
+    """规则模板摘要。
+
+    include_query_results=False 时不附「数据库查询结果」段——周期报表已有
+    每日明细表 / 趋势图，避免重复罗列。
+    """
     sections: list[str] = []
     data_notes = list(context.data_gaps) if context else []
 
@@ -45,7 +56,7 @@ def build_rule_based_summary(
     if agent_outputs.fitness and agent_outputs.fitness.narrative:
         sections.append(f"**训练**\n{agent_outputs.fitness.narrative}")
 
-    if context and context.query_results:
+    if include_query_results and context and context.query_results:
         sections.append(f"**数据库查询结果**\n{format_query_results(context.query_results)}")
 
     if not sections:

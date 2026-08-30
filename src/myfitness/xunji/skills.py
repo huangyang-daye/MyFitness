@@ -1,9 +1,6 @@
 """训记 Skill 常量 — 与 skills/xunji-*/SKILL.md 保持同步。"""
 
-from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SKILLS_DIR = PROJECT_ROOT / "skills"
+from myfitness.paths import SKILLS_DIR
 
 SKILL_BODY = "xunji-body-open-api"
 SKILL_FOOD = "xunji-food-open-api"

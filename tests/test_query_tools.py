@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from myfitness.agents.tools.base import invoke_tool
 from myfitness.agents.tools.query_planner import build_query_plan, parse_single_date
 from myfitness.agents.tools.query_tools import query_body_metrics, query_nutrition_logs
 from myfitness.db.models import Base, BodyMetric, NutritionLog, User
@@ -84,7 +85,9 @@ def test_query_nutrition_logs(db_session):
     )
     db_session.flush()
 
-    result = query_nutrition_logs(db_session, 1, date(2026, 8, 21), date(2026, 8, 21))
+    result = invoke_tool(
+        query_nutrition_logs, db_session, 1, start_date=date(2026, 8, 21), end_date=date(2026, 8, 21)
+    )
     assert result["count"] == 1
     assert result["daily_totals"]["2026-08-21"]["protein_g"] == 62
 
@@ -102,7 +105,9 @@ def test_query_body_metrics(db_session):
     )
     db_session.flush()
 
-    result = query_body_metrics(db_session, 1, date(2026, 8, 21), date(2026, 8, 21))
+    result = invoke_tool(
+        query_body_metrics, db_session, 1, start_date=date(2026, 8, 21), end_date=date(2026, 8, 21)
+    )
     assert result["count"] == 1
     assert result["records"][0]["value"] == 72.5
 

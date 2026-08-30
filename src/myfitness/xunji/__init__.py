@@ -2,7 +2,12 @@
 
 from myfitness.xunji.body import BodyOpenApi
 from myfitness.xunji.client import XunjiClient
-from myfitness.xunji.common import XunjiApiError, XunjiRateLimitError, mask_api_key
+from myfitness.xunji.common import (
+    XunjiApiError,
+    XunjiNetworkError,
+    XunjiRateLimitError,
+    mask_api_key,
+)
 from myfitness.xunji.food import FoodOpenApi, clamp_food_query_range
 from myfitness.xunji.registry import assert_skill_docs_exist, skill_doc_path
 from myfitness.xunji.training import TrainingOpenApi
@@ -12,10 +17,11 @@ __all__ = [
     "BodyOpenApi",
     "FoodOpenApi",
     "TrainingOpenApi",
-    "XunjiClient",
-    "XunjiApiError",
-    "XunjiRateLimitError",
     "WritePreview",
+    "XunjiApiError",
+    "XunjiClient",
+    "XunjiNetworkError",
+    "XunjiRateLimitError",
     "assert_skill_docs_exist",
     "clamp_food_query_range",
     "mask_api_key",

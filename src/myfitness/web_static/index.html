@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>MyFitness Agent</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="session-sidebar">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M7 12h10M9.5 8v8M14.5 8v8M4.5 10v4M19.5 10v4" /></svg>
+          </div>
+          <div class="brand-copy"><strong>MyFitness</strong><span>Agent workspace</span></div>
+          <button class="icon-button" id="openSettings" aria-label="设置" title="设置">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M12 3v3M12 18v3M4.5 7.5l2.6 1.5M16.9 15l2.6 1.5M4.5 16.5l2.6-1.5M16.9 9l2.6-1.5" /></svg>
+          </button>
+          <button class="icon-button desktop-only" id="collapseSidebar" aria-label="收起会话栏" title="收起会话栏">
+            <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM9 5v14" /><path d="m13 9-2 3 2 3" /></svg>
+          </button>
+          <button class="icon-button mobile-only" id="closeSessions" aria-label="关闭会话栏">×</button>
+        </div>
+
+        <button class="task-manager-button" id="openTaskManager">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2M7 4 5 6M17 4l2 2" /></svg>
+          定时任务
+          <span class="task-count" id="taskCount">—</span>
+        </button>
+
+        <button class="new-chat-button" id="newChatButton">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+          新建对话
+          <kbd>Ctrl K</kbd>
+        </button>
+
+        <label class="sidebar-search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg>
+          <input id="sessionFilter" placeholder="搜索对话" autocomplete="off" />
+        </label>
+
+        <div class="session-section-label">最近对话</div>
+        <nav class="session-list" id="sessionList" aria-label="对话列表"></nav>
+
+        <div class="sidebar-footer">
+          <div class="status-dot"></div>
+          <div class="sidebar-footer-copy">
+            <strong id="footerModelLabel">未配置模型</strong>
+            <span id="connectionStatus">正在连接…</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="chat-panel">
+        <header class="chat-header">
+          <button class="icon-button" id="toggleSidebar" aria-label="会话栏" title="会话栏">
+            <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM9 5v14" /></svg>
+          </button>
+          <div class="chat-title-wrap">
+            <strong id="chatTitle">新对话</strong>
+            <span><i></i> Agent ready</span>
+          </div>
+          <div class="header-actions">
+            <button class="header-button" id="toggleInspector">
+              <svg viewBox="0 0 24 24"><path d="M6 3.5h8l4 4V20H6zM14 3.5V8h4" /></svg>
+              会话产物
+              <span class="header-badge" id="artifactCount">0</span>
+            </button>
+          </div>
+        </header>
+
+        <section class="message-scroll" id="messageScroll">
+          <div class="welcome" id="welcomeState">
+            <div class="welcome-orbit">
+              <div class="welcome-logo">
+                <svg viewBox="0 0 24 24"><path d="M7 12h10M9.5 8v8M14.5 8v8M4.5 10v4M19.5 10v4" /></svg>
+              </div>
+            </div>
+            <p class="eyebrow">MYFITNESS AGENT</p>
+            <h1>今天想了解什么？</h1>
+            <p class="welcome-copy">我可以分析身体趋势、饮食与训练数据，也能生成报告或协助记录。</p>
+            <div class="suggestion-grid">
+              <button data-prompt="分析我最近 7 天的体重和体脂趋势">
+                <span class="suggestion-icon purple">↗</span><strong>分析身体趋势</strong><small>查看最近 7 天变化</small>
+              </button>
+              <button data-prompt="总结我本周的饮食情况和营养摄入">
+                <span class="suggestion-icon green">◒</span><strong>总结饮食情况</strong><small>热量与营养素分析</small>
+              </button>
+              <button data-prompt="根据最近的训练记录，给我一些训练建议">
+                <span class="suggestion-icon orange">⌁</span><strong>获取训练建议</strong><small>结合历史记录规划</small>
+              </button>
+              <button data-prompt="生成昨天的健康日报">
+                <span class="suggestion-icon blue">▤</span><strong>生成健康日报</strong><small>整理关键数据与建议</small>
+              </button>
+            </div>
+          </div>
+          <div class="messages" id="messages"></div>
+        </section>
+
+        <footer class="composer-wrap">
+          <div class="composer">
+            <textarea id="messageInput" rows="1" placeholder="给 MyFitness Agent 发送消息…"></textarea>
+            <div class="composer-bottom">
+              <label class="model-picker" title="切换模型">
+                <svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2" /><path d="M9 6V4M15 6V4M9 20v-2M15 20v-2M4 12h16" /></svg>
+                <select id="modelSelect" aria-label="模型"></select>
+              </label>
+              <div class="composer-hints"><span>Enter 发送</span><span>Shift + Enter 换行</span></div>
+              <button class="send-button" id="sendButton" aria-label="发送">
+                <svg viewBox="0 0 24 24"><path d="m6 12 6-6 6 6M12 7v11" /></svg>
+              </button>
+            </div>
+          </div>
+          <p class="disclaimer">健康建议仅供参考，不能替代专业医疗诊断。</p>
+        </footer>
+      </main>
+
+      <aside class="inspector" id="inspector">
+        <header class="inspector-header">
+          <div class="inspector-title-wrap">
+            <strong>会话产物</strong>
+            <span id="artifactScope">当前会话生成的文件</span>
+          </div>
+          <button class="icon-button" id="closeInspector" aria-label="收起产物栏" title="收起产物栏">×</button>
+        </header>
+
+        <div class="artifact-list" id="artifactList"></div>
+
+        <section class="artifact-view hidden" id="artifactView">
+          <div class="preview-header">
+            <button id="closeArtifact">← 返回</button>
+            <span id="artifactName"></span>
+            <button class="icon-button" id="copyArtifactPath" aria-label="复制路径" title="复制路径">
+              <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M15 5.5H6.5a2 2 0 0 0-2 2V16" /></svg>
+            </button>
+          </div>
+          <div class="artifact-meta" id="artifactMeta"></div>
+          <div class="artifact-body" id="artifactBody"></div>
+        </section>
+      </aside>
+    </div>
+
+    <div class="task-modal hidden" id="taskModal" role="dialog" aria-modal="true" aria-labelledby="taskModalTitle">
+      <section class="task-dialog">
+        <header class="task-dialog-header">
+          <div class="task-dialog-icon">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></svg>
+          </div>
+          <div><h2 id="taskModalTitle">定时任务</h2><p>管理自动同步与健康日报</p></div>
+          <button class="icon-button" id="closeTaskManager" aria-label="关闭定时任务">×</button>
+        </header>
+        <div class="task-runtime-status" id="taskRuntimeStatus">
+          <i></i><span>正在读取调度器状态…</span><small>Asia/Shanghai</small>
+        </div>
+        <div class="task-list" id="taskList"></div>
+        <div class="task-dialog-footer">
+          <span>修改提交后会立即写入数据库并重载调度器</span>
+          <button id="refreshTasks">刷新</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="settings-modal hidden" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <section class="settings-dialog">
+        <header class="settings-dialog-header">
+          <div class="settings-avatar">
+            <svg viewBox="0 0 24 24"><path d="M7 12h10M9.5 8v8M14.5 8v8M4.5 10v4M19.5 10v4" /></svg>
+          </div>
+          <div>
+            <h2 id="settingsTitle">设置</h2>
+            <p id="settingsSubtitle">MyFitness Agent · 本地运行</p>
+          </div>
+          <button class="icon-button" id="closeSettings" aria-label="关闭设置">×</button>
+        </header>
+
+        <div class="settings-body">
+          <section class="settings-page" id="settingsHome">
+            <button class="settings-entry" data-settings-page="models">
+              <span class="settings-entry-icon">
+                <svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2" /><path d="M9 6V4M15 6V4M9 20v-2M15 20v-2M4 12h16" /></svg>
+              </span>
+              <span class="settings-entry-copy">
+                <strong>模型</strong>
+                <small id="settingsModelSummary">未配置</small>
+              </span>
+              <span class="settings-entry-arrow">›</span>
+            </button>
+          </section>
+
+          <section class="settings-page hidden" id="settingsModels">
+            <button class="settings-back" id="settingsBack">← 返回设置</button>
+            <h3>模型</h3>
+            <p class="settings-hint">
+              按 OpenAI 兼容协议填写，任意提供 <code>/v1/chat/completions</code> 的服务都能接入。
+              API Key 只保存在本机数据目录，不会写入项目代码。
+            </p>
+
+            <div class="provider-chips" id="providerChips"></div>
+
+            <div class="model-list" id="modelList"></div>
+
+            <form class="model-form" id="modelForm" autocomplete="off">
+              <input type="hidden" id="modelFormId" value="" />
+              <h4 id="modelFormTitle">添加模型</h4>
+              <div class="model-form-grid">
+                <label class="model-field">
+                  <span>显示名称</span>
+                  <input id="modelFormName" maxlength="64" required placeholder="例如：DeepSeek" />
+                </label>
+                <label class="model-field">
+                  <span>模型标识</span>
+                  <input id="modelFormModel" maxlength="128" required placeholder="例如：deepseek-chat" />
+                </label>
+                <label class="model-field full">
+                  <span>Base URL</span>
+                  <input id="modelFormBaseUrl" placeholder="https://api.deepseek.com/v1" />
+                </label>
+                <label class="model-field full">
+                  <span>API Key</span>
+                  <input id="modelFormApiKey" type="password" placeholder="留空表示保持原值" />
+                </label>
+                <label class="model-field">
+                  <span>温度</span>
+                  <input id="modelFormTemperature" type="number" min="0" max="2" step="0.1" value="0.7" />
+                </label>
+                <label class="model-field">
+                  <span>超时（秒）</span>
+                  <input id="modelFormTimeout" type="number" min="10" max="600" step="10" value="120" />
+                </label>
+              </div>
+              <p class="model-form-note" id="modelFormNote"></p>
+              <div class="model-form-actions">
+                <button type="button" class="ghost-button" id="modelFormTest">测试连接</button>
+                <span class="model-form-spacer"></span>
+                <button type="button" class="ghost-button hidden" id="modelFormCancel">取消</button>
+                <button type="button" class="ghost-button danger hidden" id="modelFormDelete">删除</button>
+                <button type="submit" class="primary-button" id="modelFormSave">保存模型</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

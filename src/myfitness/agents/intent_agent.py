@@ -52,7 +52,8 @@ def build_system_prompt(today: date) -> str:
 | intent | 定义 | 典型例句 |
 |---|---|---|
 | sync_trigger | 从训记 App 同步/拉取/更新数据到本地 | 同步今日数据 / 拉取训记 / 更新最近7天数据 |
-| report_trigger | 生成某一天的一次性日报/晨报/报告 | 生成昨天的日报 / 出一份8月24日的报告 |
+| report_trigger | 生成某一天**或某个日期区间**的一次性日报/晨报/报告 | 生成昨天的日报 / 出一份8月24日的报告 / 生成8月20日到8月25日的报告 |
+| chart_trigger | 画统计图（折线图、柱状图等），可生成文档或插入现有文档 | 生成最近7天体重折线图 / 把近30天体脂画成图插入昨天的日报 |
 | schedule_manage | 创建/查看/修改/取消**定时/每天/每日**重复任务 | 每天早上7点生成日报 / 查看定时任务 / 取消每天同步 |
 | data_query | 查询某天/某段时间**已记录**的数据 | 昨天吃了多少蛋白质 / 查询今天体重 / 8月21日练了什么 |
 | trend_analysis | 分析一段时间的**趋势/变化/对比** | 近30天体脂变化 / 对比近7天摄入和消耗 |
@@ -76,15 +77,27 @@ def build_system_prompt(today: date) -> str:
 2. 支持的表达式（以今天 {today.isoformat()} 为基准换算）：
    - 今天/今日 → 当天；昨天/昨日 → 前一天；前天 → 前两天
    - N月N日 / N月N号 / YYYY-MM-DD / M.D / M/D → 对应日期
-   - 最近N天 / 近N天 / 最近一周 → 今天往前推N天（**含今天**）
+   - 最近N天 / 近N天 / 过去N天 / 前N天 / 最近一周 → 今天往前推N天（**含今天**）
+   - A到B / A至B / A~B（如「8月20日到8月25日」）→ 连续区间 start=A, end=B
 3. 输出格式：{{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}}；单日时 start 与 end 相同。
+   **report_trigger 与 chart_trigger 都允许 start < end（区间报表 / 区间趋势图）。**
 4. 换算出的日期不得晚于今天；若消息中的日期在未来，date_range 置 null。
+5. **一个消息提及多个日期点（用「和/与/、/到/至」连接，如「昨天和今天」
+   「前天和昨天」「8月20号和8月25号」「上周三和今天」）时，date_range 取这些
+   日期的**最早到最晚**的连续范围**：start = 最早一天，end = 最晚一天。
+   例：「同步昨天和今天的数据」→ start = 昨天，end = 今天（覆盖两天）。
+   注意：不要把「昨天和今天」只收敛成今天；必须包含提到的每一个日期。
 
 ## 易混淆情况
 1. 出现「每天/每日/定时/固定」+ 任何动作 → schedule_manage，而**不是** report_trigger / sync_trigger。
    例：「每天8点同步数据」→ schedule_manage。
 2. 「生成日报」未指明日期时 date_range 填 null，由对话层向用户追问具体日期；指明日期则用该日期。
 3. data_query 与 trend_analysis 的区别：问「某天/某段是多少/有没有」是 data_query；问「变化/趋势/对比」是 trend_analysis。
+7. 出现「折线图/趋势图/柱状图/统计图/画个图/可视化」等**明确要图**的措辞 → chart_trigger，
+   而不是 trend_analysis（后者只要文字分析）。
+   例：「近7天体重折线图」→ chart_trigger；「近7天体重变化」→ trend_analysis。
+8. 「把图插入到/加到…（已有日报/文档）」只做插入 → 只给 chart_trigger，
+   **不要**同时给 report_trigger（不重新生成报告）。
 4. 带数量描述的食物语句（吃了鸡胸肉200g、鸡蛋2个）→ manual_entry，不是 data_query。
 5. 「目标/降到/增到/减到 + 数值单位」→ goal_setting。
 6. 与健身数据无关的问候/闲聊/帮助请求 → general。
@@ -105,11 +118,26 @@ def build_system_prompt(today: date) -> str:
 用户：同步今日数据
 输出：{{"intents": ["sync_trigger"], "domain": null, "date_range": {{"start": "{today.isoformat()}", "end": "{today.isoformat()}"}}, "reasoning": "同步当天数据"}}
 
+用户：同步昨天和今天的数据
+输出：{{"intents": ["sync_trigger"], "domain": null, "date_range": {{"start": "{yesterday.isoformat()}", "end": "{today.isoformat()}"}}, "reasoning": "同步昨天与今天两天"}}
+
+用户：同步前天和昨天的数据
+输出：{{"intents": ["sync_trigger"], "domain": null, "date_range": {{"start": "{(yesterday - timedelta(days=1)).isoformat()}", "end": "{yesterday.isoformat()}"}}, "reasoning": "同步前天与昨天两天"}}
+
 用户：同步{example_cn}数据并生成日报
 输出：{{"intents": ["sync_trigger", "report_trigger"], "domain": null, "date_range": {{"start": "{yesterday.isoformat()}", "end": "{yesterday.isoformat()}"}}, "reasoning": "先同步该日数据再生成日报"}}
 
 用户：生成昨天的日报
 输出：{{"intents": ["report_trigger"], "domain": null, "date_range": {{"start": "{yesterday.isoformat()}", "end": "{yesterday.isoformat()}"}}, "reasoning": "生成昨日日报"}}
+
+用户：生成8月20日到8月25日的报告
+输出：{{"intents": ["report_trigger"], "domain": null, "date_range": {{"start": "{month_start.isoformat()}", "end": "{today.isoformat()}"}}, "reasoning": "生成区间周期报表"}}
+
+用户：生成最近7天体重折线图
+输出：{{"intents": ["chart_trigger"], "domain": "body", "date_range": {{"start": "{last_week_start.isoformat()}", "end": "{today.isoformat()}"}}, "reasoning": "绘制体重折线图"}}
+
+用户：把近30天摄入热量画成柱状图保存到文档
+输出：{{"intents": ["chart_trigger"], "domain": "nutrition", "date_range": {{"start": "{month_start.isoformat()}", "end": "{today.isoformat()}"}}, "reasoning": "生成热量柱状图文档"}}
 
 用户：拉取最近7天训记数据
 输出：{{"intents": ["sync_trigger"], "domain": null, "date_range": {{"start": "{last_week_start.isoformat()}", "end": "{today.isoformat()}"}}, "reasoning": "同步最近7天含今天"}}

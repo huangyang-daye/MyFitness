@@ -10,9 +10,15 @@ build/
 .coverage
 htmlcov/
 .ruff_cache/
-reports/
 *.log
 .mypy_cache/
 skills
 .workbuddy/
 .cursor/
+
+# 使用记录（运行时产物）
+# 报告 / 图表 / 对话历史一律写在项目之外的 DATA_DIR（默认 D:/MyFitness-data），
+# 以下仅为防御性条目，防止旧版本或临时回退时把它们提交进来。
+reports/
+.chatHistory/
+data/

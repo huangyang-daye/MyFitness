@@ -82,6 +82,14 @@ class ScheduledTaskRepository:
             )
         )
 
+    def get_by_id(self, task_id: int) -> ScheduledTask | None:
+        return self.session.scalar(
+            select(ScheduledTask).where(
+                ScheduledTask.id == task_id,
+                ScheduledTask.user_id == self.user_id,
+            )
+        )
+
     def upsert(
         self,
         task_type: str,
@@ -112,6 +120,29 @@ class ScheduledTaskRepository:
         if not task:
             return None
         task.enabled = False
+        self.session.flush()
+        return task
+
+    def update(
+        self,
+        task_id: int,
+        *,
+        task_type: str | None = None,
+        label: str | None = None,
+        time_of_day: str | None = None,
+        enabled: bool | None = None,
+    ) -> ScheduledTask | None:
+        task = self.get_by_id(task_id)
+        if task is None:
+            return None
+        if task_type is not None:
+            task.task_type = task_type
+        if label is not None:
+            task.label = label
+        if time_of_day is not None:
+            task.time_of_day = time_of_day
+        if enabled is not None:
+            task.enabled = enabled
         self.session.flush()
         return task
 

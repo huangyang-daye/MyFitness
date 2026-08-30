@@ -160,7 +160,7 @@ class ActionItem(BaseModel):
 
 class SummaryAgentOutput(BaseModel):
     agent: Literal["summary"] = "summary"
-    output_type: Literal["daily_report", "chat_reply"]
+    output_type: Literal["daily_report", "period_report", "chat_reply"]
     content_md: str = ""
     cross_domain_insights: list[CrossDomainInsight] = Field(default_factory=list)
     conflicts_resolved: list[ConflictResolved] = Field(default_factory=list)

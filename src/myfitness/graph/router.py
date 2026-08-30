@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterator
 from datetime import date, timedelta
 
+from myfitness.agents.tools.chart_tools import INSERT_DOC_KEYWORDS, is_chart_request
 from myfitness.agents.tools.query_planner import parse_single_date
 from myfitness.schemas.state import Intent, PendingConfirmation, RouteResult
 
@@ -23,6 +25,7 @@ CANCEL_WORDS = {"取消", "不要", "算了", "no", "cancel"}
 
 _SYNC_RE = re.compile(r"(同步|拉取|更新).*(训记|数据)")
 _RECENT_DAYS_RE = re.compile(r"最?\s*近\s*(\d+)\s*天")
+_PAST_DAYS_RE = re.compile(r"(?:过[去了]?|前)\s*(\d+)\s*天")
 _SCHEDULE_WORDS = ("定时", "每天", "每日", "自动")
 _SCHEDULE_ACTION_WORDS = ("日报", "同步", "任务", "报告")
 
@@ -71,16 +74,34 @@ def _reconcile(llm: RouteResult, keyword: RouteResult | None) -> RouteResult:
 
     - LLM 判为 general 而关键词有明确命中 → 采用关键词（防 LLM 过度泛化）；
     - LLM 未提取到日期而关键词解析出了日期（同步/日报场景）→ 补齐日期；
+    - LLM 解析出的日期范围比关键词**更窄**、关键词范围为其超集（如「昨天和今天」
+      LLM 只给今天）时，拓宽到关键词范围，确保不漏掉用户提到的日期；
     - 其余情况信任 LLM。
     """
     if keyword is not None:
         if llm.intent == Intent.GENERAL and keyword.intent != Intent.GENERAL:
             return keyword
-        if llm.start_date is None and keyword.start_date is not None and (
-            llm.has(Intent.SYNC_TRIGGER) or llm.has(Intent.REPORT_TRIGGER)
+        if (
+            llm.has(Intent.SYNC_TRIGGER)
+            or llm.has(Intent.REPORT_TRIGGER)
+            or llm.has(Intent.CHART_TRIGGER)
         ):
-            llm.start_date = keyword.start_date
-            llm.end_date = keyword.end_date
+            # LLM 漏日期 → 用关键词补齐
+            if llm.start_date is None and keyword.start_date is not None:
+                llm.start_date = keyword.start_date
+                llm.end_date = keyword.end_date
+            # LLM 范围比关键词窄且关键词为其超集 → 拓宽（防漏掉「昨天和今天」中的昨天）
+            elif (
+                llm.start_date
+                and llm.end_date
+                and keyword.start_date
+                and keyword.end_date
+                and keyword.start_date <= llm.start_date
+                and keyword.end_date >= llm.end_date
+                and (keyword.start_date < llm.start_date or keyword.end_date > llm.end_date)
+            ):
+                llm.start_date = keyword.start_date
+                llm.end_date = keyword.end_date
     return llm
 
 
@@ -112,12 +133,17 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
     ):
         return RouteResult(intents=[Intent.SCHEDULE_MANAGE])
 
-    # 可组合的动作意图：同步 + 日报（「同步8月24日数据并生成日报」→ 先同步再出报告）
+    # 「把体重折线图插入到8月24日的日报」只是插入图表，不该触发生成新日报
+    insert_only = is_chart_request(text) and any(k in text for k in INSERT_DOC_KEYWORDS)
+
+    # 可组合的动作意图：同步 + 日报 + 统计图（按顺序执行）
     action_intents: list[Intent] = []
     if _SYNC_RE.search(text):
         action_intents.append(Intent.SYNC_TRIGGER)
-    if _is_report_request(text):
+    if _is_report_request(text) and not insert_only:
         action_intents.append(Intent.REPORT_TRIGGER)
+    if is_chart_request(text):
+        action_intents.append(Intent.CHART_TRIGGER)
 
     if action_intents:
         start, end = _parse_action_date_range(text, today)
@@ -139,6 +165,17 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
     if re.search(r"(改成|调整|取消).*(训练|计划|休息)", text):
         return RouteResult(Intent.PLAN_ADJUST, domain="fitness")
 
+    # 统计图（折线图 / 柱状图 / 趋势图…）：交由 chart tool 渲染 mermaid，
+    # 与 trend_analysis 区分（后者是文字分析，前者要出图）
+    if is_chart_request(text):
+        start, end = _parse_action_date_range(text, today)
+        return RouteResult(
+            intents=[Intent.CHART_TRIGGER],
+            domain=_infer_domain_from_text(text),
+            start_date=start,
+            end_date=end,
+        )
+
     if re.search(r"(最?\s*近\s*\d+\s*天|近\s*\d+\s*天|趋势|变化|对比)", text):
         return RouteResult(Intent.TREND_ANALYSIS)
 
@@ -158,26 +195,82 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
 
 
 def _parse_action_date_range(text: str, today: date) -> tuple[date | None, date | None]:
-    """从同步/日报类消息解析日期范围；未指明日期时返回 (None, None)。"""
+    """从同步/日报类消息解析日期范围；未指明日期时返回 (None, None)。
+
+    一条消息可能包含多个日期点（如「昨天和今天」「前天到昨天」
+    「8月20号和25号」），此时取所有提及日期的**最早与最晚**构成连续范围，
+    而不是碰到「今天」就只返回当天。
+    """
+    # 收集所有提及的日期区间（每个元素为 (start, end)）
+    candidates: list[tuple[date, date]] = []
+
+    # 相对日词（每个是一个单日点）
     if "今天" in text or "今日" in text:
-        return today, today
+        candidates.append((today, today))
     if "昨天" in text or "昨日" in text:
-        return today - timedelta(days=1), today - timedelta(days=1)
+        candidates.append((today - timedelta(days=1), today - timedelta(days=1)))
     if "前天" in text:
-        return today - timedelta(days=2), today - timedelta(days=2)
+        candidates.append((today - timedelta(days=2), today - timedelta(days=2)))
 
-    if m := _RECENT_DAYS_RE.search(text):
-        days = int(m.group(1))
-        if days > 0:
-            # 「最近N天」含今天
-            return today - timedelta(days=days - 1), today
+    # 最近N天 / 近N天 / 过去N天 / 前N天 → 含今天的范围
+    for pattern in (_RECENT_DAYS_RE, _PAST_DAYS_RE):
+        if m := pattern.search(text):
+            days = int(m.group(1))
+            if days > 0:
+                candidates.append((today - timedelta(days=days - 1), today))
+            break
 
-    # N月N日 / YYYY-MM-DD / M.D 等单日表达
-    single = parse_single_date(text, today)
-    if single is not None:
-        return single, single
+    # 显式日期（N月N日 / YYYY-MM-DD / M.D）：消息中可能多个，逐个作为单日点
+    for d in _iter_explicit_dates(text, today):
+        candidates.append((d, d))
 
-    return None, None
+    if not candidates:
+        return None, None
+
+    start = min(c[0] for c in candidates)
+    end = max(c[1] for c in candidates)
+    return start, end
+
+
+def _iter_explicit_dates(text: str, today: date) -> Iterator[date]:
+    """提取消息中所有显式单日日期（N月N日 / YYYY-MM-DD / M.D）。"""
+    from myfitness.agents.tools.query_planner import _resolve_month_day
+
+    seen: set[str] = set()
+    # YYYY-MM-DD
+    for m in re.finditer(r"(\d{4})-(\d{2})-(\d{2})", text):
+        try:
+            d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            continue
+        key = d.isoformat()
+        if key not in seen:
+            seen.add(key)
+            yield d
+    # N月N日 / N月N号
+    for m in re.finditer(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?", text):
+        month, day = int(m.group(1)), int(m.group(2))
+        try:
+            d = _resolve_month_day(month, day, today)
+        except ValueError:
+            continue
+        key = d.isoformat()
+        if key not in seen:
+            seen.add(key)
+            yield d
+    # M.D / M/D（点号分隔，避免与小数体重等混淆：要求整体像日期）
+    for m in re.finditer(r"(?<!\d)(\d{1,2})[./](\d{1,2})(?!\d)", text):
+        month, day = int(m.group(1)), int(m.group(2))
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            continue
+        try:
+            d = _resolve_month_day(month, day, today)
+        except ValueError:
+            continue
+        key = d.isoformat()
+        if key not in seen:
+            seen.add(key)
+            yield d
 
 
 def _infer_domain_from_text(text: str) -> str | None:
@@ -207,6 +300,7 @@ def agents_for_intent(intent: Intent, domain: str | None = None) -> list[str]:
         Intent.SYNC_TRIGGER: [],
         Intent.SCHEDULE_MANAGE: [],
         Intent.REPORT_TRIGGER: [],
+        Intent.CHART_TRIGGER: [],
         Intent.GENERAL: [],
         Intent.CONFIRMATION_RESPONSE: [],
     }

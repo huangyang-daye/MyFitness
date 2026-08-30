@@ -25,6 +25,10 @@ class XunjiApiError(Exception):
         super().__init__(message)
 
 
+class XunjiNetworkError(XunjiApiError):
+    """The Open API could not be reached from the current process."""
+
+
 class XunjiConfirmationRequiredError(XunjiApiError):
     """Skill: user confirmation required — 需先 dry_run 展示摘要并等用户确认。"""
 
@@ -162,6 +166,24 @@ class XunjiHttpClient:
                 if attempt + 1 >= self.max_retries:
                     raise XunjiApiError(f"HTTP {exc.response.status_code}: {exc}") from exc
                 time.sleep(2**attempt)
+            except httpx.TimeoutException as exc:
+                if attempt + 1 >= self.max_retries:
+                    raise XunjiNetworkError(
+                        "连接训记 Open API 超时，请稍后重试并检查网络连接。"
+                    ) from exc
+                time.sleep(2**attempt)
+            except httpx.TransportError as exc:
+                if _is_windows_socket_permission_error(exc):
+                    raise XunjiNetworkError(
+                        "当前进程没有外网套接字访问权限（WinError 10013）。"
+                        "请停止本 UI，并在 Codex 之外的普通 PowerShell 中运行 `myfitness ui`；"
+                        "若仍失败，请检查 Windows 防火墙是否允许 python.exe 出站访问 HTTPS (443)。"
+                    ) from exc
+                if attempt + 1 >= self.max_retries:
+                    raise XunjiNetworkError(
+                        "无法连接训记 Open API，请检查网络、系统代理和防火墙后重试。"
+                    ) from exc
+                time.sleep(2**attempt)
 
         raise XunjiApiError("Max retries exceeded")
 
@@ -181,3 +203,15 @@ class XunjiHttpClient:
 
         if "仅vip可用" in lower or ("vip" in lower and "可用" in msg):
             raise XunjiApiError("仅VIP可用", data)
+
+
+def _is_windows_socket_permission_error(exc: BaseException) -> bool:
+    """Inspect an httpx exception chain without exposing request credentials."""
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if getattr(current, "winerror", None) == 10013 or "WinError 10013" in str(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
