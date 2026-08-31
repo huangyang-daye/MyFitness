@@ -9,7 +9,6 @@ from myfitness.agents.tools.query_format import format_query_results
 from myfitness.debug import trace_agent
 from myfitness.llm.factory import is_llm_configured, stream_chat_completion
 from myfitness.schemas.agent_outputs import AgentOutputs, SummaryAgentOutput
-from myfitness.schemas.constants import DISCLAIMER
 from myfitness.schemas.state import ContextSnapshot, Intent
 
 logger = logging.getLogger(__name__)
@@ -32,7 +31,7 @@ def run_summary_agent(
         output_type=output_type,  # type: ignore[arg-type]
         content_md=content_md,
         data_quality_notes=list(context.data_gaps) if context else [],
-        disclaimer=DISCLAIMER,
+        disclaimer="",
     )
 
 
@@ -106,8 +105,7 @@ def build_summary_messages(
             "content": (
                 "你是 MyFitness 多 Agent 健康助手的 Summary Agent。"
                 "根据各 Specialist Agent 的结构化分析及数据库查询明细，用简洁清晰的中文回复用户。"
-                "要求：必须优先引用数据库查询结果中的具体数字；不做医疗诊断；不要编造未提供的数据；"
-                "不要输出免责声明（会由系统追加）。"
+                "要求：必须优先引用数据库查询结果中的具体数字；不做医疗诊断；不要编造未提供的数据。"
             ),
         },
         {"role": "user", "content": user_content},

@@ -10,7 +10,6 @@ from myfitness.agents.summary import iter_summary_reply, should_stream_summary
 from myfitness.db.models import Base, User
 from myfitness.graph.chat import finalize_streamed_reply, iter_chat_reply, new_chat_state, prepare_chat_turn
 from myfitness.schemas.agent_outputs import AgentOutputs
-from myfitness.schemas.constants import DISCLAIMER
 from myfitness.schemas.state import Intent
 
 
@@ -68,12 +67,17 @@ def test_iter_summary_reply_partial_output_appends_note():
     assert "不完整" in text
 
 
-def test_iter_chat_reply_includes_disclaimer(db_session):
+def test_iter_chat_reply_no_disclaimer(db_session):
     state = new_chat_state(user_id=1)
-    with patch("myfitness.graph.chat.is_llm_configured", return_value=False):
+    with (
+        patch("myfitness.graph.chat.is_llm_configured", return_value=False),
+        patch("myfitness.agents.summary.is_llm_configured", return_value=False),
+    ):
         result = prepare_chat_turn(db_session, state, "你好")
     chunks = list(iter_chat_reply(result.state))
-    assert DISCLAIMER in "".join(chunks)
+    text = "".join(chunks)
+    assert "不构成医疗建议" not in text
+    assert len(text.strip()) > 0
 
 
 def test_finalize_streamed_reply(db_session):

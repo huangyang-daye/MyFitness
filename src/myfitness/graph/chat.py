@@ -46,7 +46,6 @@ from myfitness.graph.progress import ProgressCallback, emit, label_for
 from myfitness.graph.router import RouteResult, agents_for_intent, classify_intent
 from myfitness.llm.factory import is_llm_configured
 from myfitness.schemas.agent_outputs import AgentOutputs
-from myfitness.schemas.constants import DISCLAIMER
 from myfitness.schemas.state import (
     Artifact,
     ChatMessage,
@@ -245,15 +244,13 @@ def finalize_streamed_reply(state: MyFitnessGraphState, reply: str) -> MyFitness
 
 
 def iter_chat_reply(state: MyFitnessGraphState) -> Iterator[str]:
-    """在 prepare_chat_turn(stream=True) 之后调用，yield 回复正文 + 免责声明。"""
-    for chunk in iter_summary_reply(
+    """在 prepare_chat_turn(stream=True) 之后调用，yield 回复正文。"""
+    yield from iter_summary_reply(
         state.agent_outputs,
         state.context,
         state.intent or Intent.GENERAL,
         state.user_message,
-    ):
-        yield chunk
-    yield f"\n\n_{DISCLAIMER}_"
+    )
 
 
 def _finalize_rule_summary(state: MyFitnessGraphState) -> None:
@@ -264,7 +261,7 @@ def _finalize_rule_summary(state: MyFitnessGraphState) -> None:
         state.user_message,
     )
     summary = state.agent_outputs.summary
-    state.reply = f"{summary.content_md}\n\n_{summary.disclaimer}_"
+    state.reply = summary.content_md
 
 
 def _agents_for_turn(route: RouteResult, plan: QueryPlan | None) -> list[str]:
@@ -374,7 +371,6 @@ def _handle_confirmation(
     state.agent_outputs.summary = run_summary_agent(
         state.agent_outputs, state.context, Intent.MANUAL_ENTRY
     )
-    state.reply += f"\n\n_{DISCLAIMER}_"
     _append_assistant(state)
 
 
@@ -478,7 +474,7 @@ def _handle_sync_and_report(
 
     result: dict | None = None
     try:
-        result = _generate_report(session, state, sync_start, sync_end)
+        result = _generate_report(session, state, sync_start, sync_end, route)
         _record_report_artifact(state, result)
         parts.append(_format_report_reply(result))
     except Exception as exc:
@@ -575,7 +571,7 @@ def _handle_report(
 
     result: dict | None = None
     try:
-        result = _generate_report(session, state, start_date, end_date or start_date)
+        result = _generate_report(session, state, start_date, end_date or start_date, route)
         _record_report_artifact(state, result)
         state.reply = _format_report_reply(result)
     except Exception as exc:
@@ -590,14 +586,18 @@ def _generate_report(
     state: MyFitnessGraphState,
     start_date: date,
     end_date: date,
+    route: RouteResult | None = None,
 ) -> dict:
     """单日 → 日报；多日 → 周期报表（含身体数据趋势图）。"""
+    domain = route.domain if route else None
     if start_date == end_date:
         return run_daily_report(
             session,
             state.user_id,
             report_date=end_date,
             sync_first=False,
+            user_message=state.user_message,
+            domain=domain,
         )
     return run_period_report(
         session,
@@ -605,6 +605,8 @@ def _generate_report(
         start_date=start_date,
         end_date=end_date,
         sync_first=False,
+        user_message=state.user_message,
+        domain=domain,
     )
 
 

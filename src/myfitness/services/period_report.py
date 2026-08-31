@@ -1,8 +1,8 @@
 """周期报表 — 可指定日期区间的健康报告（单日退化为日报）。
 
-- 区间仅 1 天：输出与原「日报」完全一致的格式；
-- 区间 > 1 天：在日报结构基础上追加「身体数据趋势图」（Mermaid 折线图）、
-  每日明细表与区间汇总。
+报告正文由 LLM 根据用户诉求动态撰写（见 agents/report_generator.py），
+不再使用固定的「分析摘要 / 原始指标 / 每日明细」模板。
+多日区间可附加 Mermaid 趋势图作为补充。
 """
 
 from __future__ import annotations
@@ -16,7 +16,11 @@ from sqlalchemy.orm import Session
 from myfitness.agents.body_monitor import run_body_agent
 from myfitness.agents.fitness_planner import run_fitness_agent
 from myfitness.agents.nutritionist import run_nutrition_agent
-from myfitness.agents.summary import run_summary_agent
+from myfitness.agents.report_generator import (
+    build_report_title,
+    generate_report_body,
+    wrap_report_document,
+)
 from myfitness.agents.tools.base import invoke_tool
 from myfitness.agents.tools.chart_tools import (
     BODY_METRIC_LABELS,
@@ -32,8 +36,7 @@ from myfitness.config import get_settings
 from myfitness.db.repositories.reports import DailyReportRepository
 from myfitness.db.session import get_or_create_default_user
 from myfitness.schemas.agent_outputs import AgentOutputs
-from myfitness.schemas.constants import DISCLAIMER
-from myfitness.schemas.state import ContextSnapshot, Intent
+from myfitness.schemas.state import ContextSnapshot
 from myfitness.services.context_loader import load_context_snapshot
 from myfitness.sync.orchestrator import run_sync
 
@@ -60,6 +63,8 @@ def run_period_report(
     lookback_days: int = 30,
     include_charts: bool = True,
     chart_metrics: list[str] | None = None,
+    user_message: str = "",
+    domain: str | None = None,
 ) -> dict:
     """生成区间报表：可选先同步，再跑三 Agent + Summary，持久化并写文件。
 
@@ -90,6 +95,8 @@ def run_period_report(
         lookback_days=lookback_days,
         include_charts=include_charts,
         chart_metrics=chart_metrics,
+        user_message=user_message,
+        domain=domain,
     )
 
 
@@ -110,6 +117,17 @@ def normalize_period(
     return yesterday, yesterday
 
 
+def _agents_for_report(domain: str | None) -> list[str]:
+    """按域收窄 Specialist Agent；未指定域时跑全部。"""
+    if domain == "body":
+        return ["body"]
+    if domain == "nutrition":
+        return ["nutrition"]
+    if domain == "fitness":
+        return ["fitness"]
+    return ["body", "nutrition", "fitness"]
+
+
 def render_period_report(
     session: Session,
     user_id: int,
@@ -120,6 +138,8 @@ def render_period_report(
     lookback_days: int = 30,
     include_charts: bool = True,
     chart_metrics: list[str] | None = None,
+    user_message: str = "",
+    domain: str | None = None,
 ) -> dict:
     """渲染并持久化区间报表（不做同步，同步由调用方负责）。"""
     get_or_create_default_user(session, user_id)
@@ -177,22 +197,23 @@ def render_period_report(
     if query_results:
         context.query_results = query_results
 
-    outputs = AgentOutputs(
-        body=run_body_agent(context, analysis_date=end_date),
-        nutrition=run_nutrition_agent(context, analysis_date=end_date),
-        fitness=run_fitness_agent(context, analysis_date=end_date),
-    )
-    range_label = (
-        end_date.isoformat() if is_daily else f"{start_date.isoformat()} ~ {end_date.isoformat()}"
-    )
-    summary = run_summary_agent(
+    report_agents = _agents_for_report(domain)
+    outputs = AgentOutputs()
+    if "body" in report_agents:
+        outputs.body = run_body_agent(context, analysis_date=end_date)
+    if "nutrition" in report_agents:
+        outputs.nutrition = run_nutrition_agent(context, analysis_date=end_date)
+    if "fitness" in report_agents:
+        outputs.fitness = run_fitness_agent(context, analysis_date=end_date)
+
+    report_kind = "daily" if is_daily else "period"
+    body_md = generate_report_body(
         outputs,
         context,
-        Intent.TREND_ANALYSIS,
-        user_message=f"生成 {range_label} 健康{'日报' if is_daily else '周期报表'}",
-        output_type="daily_report" if is_daily else "period_report",
-        # 周期报表自带趋势图与每日明细，摘要里不再罗列查询明细
-        include_query_results=is_daily,
+        user_message,
+        start_date=start_date,
+        end_date=end_date,
+        report_kind=report_kind,
     )
 
     charts = []
@@ -210,28 +231,23 @@ def render_period_report(
             logger.warning("生成趋势图失败，报告中省略图表: %s", exc)
             charts = []
 
-    if is_daily:
-        content_md = format_daily_report_md(
-            report_date=end_date,
-            context=context,
-            summary_content=summary.content_md,
-            sync_result=sync_result,
-            body_metrics=body_metrics,
-            nutrition_logs=nutrition_logs,
-            training_sessions=training_sessions,
-        )
-    else:
-        content_md = format_period_report_md(
+    charts_md = ""
+    if charts:
+        charts_md = "\n\n".join(c.to_markdown(heading_level=3) for c in charts)
+
+    content_md = wrap_report_document(
+        title=build_report_title(
+            report_kind=report_kind,
             start_date=start_date,
             end_date=end_date,
-            context=context,
-            summary_content=summary.content_md,
-            sync_result=sync_result,
-            body_metrics=body_metrics,
-            nutrition_logs=nutrition_logs,
-            training_sessions=training_sessions,
-            charts=charts,
-        )
+        ),
+        body_md=body_md,
+        start_date=start_date,
+        end_date=end_date,
+        context=context,
+        sync_result=sync_result,
+        charts_md=charts_md,
+    )
 
     agent_payload = outputs.model_dump(mode="json")
     agent_payload["period"] = {
@@ -280,8 +296,6 @@ def format_daily_report_md(
     """单日日报（与历史格式保持一致）。"""
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     dr = context.date_range
-    gaps = context.data_gaps or []
-    banner = "⚠ 部分数据缺失：" + "；".join(gaps) if gaps else "数据完整"
     body_detail = format_body_metrics_detail(body_metrics or [])
     nutrition_detail = format_nutrition_logs_detail(nutrition_logs or {})
     training_detail = format_training_sessions_detail(training_sessions or [])
@@ -294,7 +308,6 @@ def format_daily_report_md(
 
 > 生成时间：{generated_at}{sync_line}
 > 数据覆盖：{dr.start.isoformat()} ~ {dr.end.isoformat()}
-> {banner}
 
 ---
 
@@ -314,10 +327,6 @@ def format_daily_report_md(
 
 ### 训练（报告日）
 {training_detail}
-
----
-
-_{DISCLAIMER}_
 """
     return header
 
@@ -337,8 +346,6 @@ def format_period_report_md(
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     span_days = (end_date - start_date).days + 1
     dr = context.date_range
-    gaps = context.data_gaps or []
-    banner = "⚠ 部分数据缺失：" + "；".join(gaps) if gaps else "数据完整"
 
     sync_line = ""
     if sync_result:
@@ -372,7 +379,6 @@ def format_period_report_md(
 > 生成时间：{generated_at}{sync_line}
 > 报告区间：{start_date.isoformat()} ~ {end_date.isoformat()}（{span_days} 天）
 > 数据覆盖：{dr.start.isoformat()} ~ {dr.end.isoformat()}
-> {banner}
 
 ---
 
@@ -401,10 +407,6 @@ def format_period_report_md(
 ## 训练明细
 
 {training_detail}
-
----
-
-_{DISCLAIMER}_
 """
 
 

@@ -1,6 +1,7 @@
-"""周期报表测试 — 单日退化为日报，多日追加趋势图与每日明细。"""
+"""周期报表测试 — LLM 动态报告 + 多日趋势图。"""
 
 from datetime import date, timedelta
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
@@ -17,6 +18,18 @@ from myfitness.services.period_report import (
 
 START = date(2026, 8, 20)
 END = date(2026, 8, 26)
+MOCK_REPORT_BODY = "## 体重变化\n\n近7天体重从 72.4 kg 降至 71.2 kg。"
+
+
+@pytest.fixture(autouse=True)
+def mock_llm_report():
+    with patch(
+        "myfitness.agents.report_generator.is_llm_configured", return_value=True
+    ), patch(
+        "myfitness.agents.report_generator.chat_completion",
+        return_value=MOCK_REPORT_BODY,
+    ):
+        yield
 
 
 @pytest.fixture
@@ -107,6 +120,7 @@ def test_single_day_report_degrades_to_daily_report(db_session):
     assert result["report_date"] == START.isoformat()
     content = result["content_md"]
     assert "# MyFitness 日报 — 2026-08-20" in content
+    assert MOCK_REPORT_BODY in content
     assert "xychart-beta" not in content
     assert result["file_path"].endswith("2026-08-20.md")
 
@@ -122,15 +136,11 @@ def test_multi_day_report_is_period_report_with_charts(db_session):
 
     content = result["content_md"]
     assert "# MyFitness 周期报表 — 2026-08-20 ~ 2026-08-26（7 天）" in content
-    assert "## 身体数据趋势" in content
+    assert MOCK_REPORT_BODY in content
+    assert "## 数据趋势图" in content
     assert "xychart-beta" in content
     assert 'x-axis ["08-20", "08-21"' in content
     assert "line [72.4, 72.2, 72, 71.8, 71.6, 71.4, 71.2]" in content
-    assert "## 每日明细" in content
-    assert "| 日期 | 体重 (kg) | 体脂率 (%) | 热量 (kcal) | 蛋白质 (g) | 训练次数 |" in content
-    assert "## 区间汇总" in content
-    assert "体重：72.4 → 71.2 kg（-1.2 kg，7 个记录日）" in content
-    assert "训练：3 次" in content
     assert result["file_path"].endswith("2026-08-20_2026-08-26.md")
 
 
@@ -152,8 +162,8 @@ def test_period_report_without_enough_body_data_skips_chart(db_session):
     result = run_period_report(db_session, 1, empty_start, empty_end, sync_first=False)
 
     assert result["charts"] == []
-    assert "区间内身体指标数据点不足" in result["content_md"]
     assert "xychart-beta" not in result["content_md"]
+    assert MOCK_REPORT_BODY in result["content_md"]
 
 
 def test_period_report_sync_failure_does_not_break(db_session, monkeypatch):

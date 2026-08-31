@@ -35,6 +35,20 @@ SAMPLE_TRAINING_PAYLOAD = {
 }
 
 
+MOCK_REPORT_BODY = "## 健康日报\n\n今日数据概览。"
+
+
+@pytest.fixture(autouse=True)
+def mock_llm_report():
+    with patch(
+        "myfitness.agents.report_generator.is_llm_configured", return_value=True
+    ), patch(
+        "myfitness.agents.report_generator.chat_completion",
+        return_value=MOCK_REPORT_BODY,
+    ):
+        yield
+
+
 @pytest.fixture
 def db_session(tmp_path):
     engine = create_engine("sqlite:///:memory:")
@@ -72,6 +86,12 @@ def test_classify_schedule_and_report_intents():
     assert classify_intent("查看定时任务", use_llm=False).intent == Intent.SCHEDULE_MANAGE
 
 
+def test_classify_focused_weight_report_as_trend_analysis():
+    result = classify_intent("给我一个近7天的体重变化报告", use_llm=False)
+    assert result.intent == Intent.TREND_ANALYSIS
+    assert result.domain == "body"
+
+
 def test_run_daily_report_persists(db_session, tmp_path, monkeypatch):
     monkeypatch.setenv("DAILY_REPORT_OUTPUT_DIR", str(tmp_path))
     from myfitness.config import get_settings
@@ -102,7 +122,7 @@ def test_run_daily_report_persists(db_session, tmp_path, monkeypatch):
     saved = DailyReportRepository(db_session, 1).get_by_date(date(2026, 8, 22))
     assert saved is not None
     assert "MyFitness 日报" in saved.content_md
-    assert "报告日训练次数" not in saved.content_md
+    assert MOCK_REPORT_BODY in saved.content_md
 
 
 def test_daily_report_training_section_shows_detail(db_session):
@@ -128,11 +148,8 @@ def test_daily_report_training_section_shows_detail(db_session):
         )
 
     content = result["content_md"]
-    assert "### 训练（报告日）" in content
-    assert "报告日训练次数" not in content
-    assert "腿臀" in content
-    assert "单腿哑铃硬拉" in content
-    assert "12.5kg×12" in content
+    assert "# MyFitness 日报" in content
+    assert MOCK_REPORT_BODY in content
 
 
 def test_daily_report_body_and_nutrition_sections_show_detail(db_session):
@@ -186,13 +203,8 @@ def test_daily_report_body_and_nutrition_sections_show_detail(db_session):
     )
 
     content = result["content_md"]
-    assert "### 身体（报告日）" in content
-    assert "| 体重 | 72 kg | manual |" in content
-    assert "| 体脂率 | 18.5 % | xunji_sync |" in content
-    assert "### 饮食（报告日）" in content
-    assert "| 当日合计 | 446 kcal | 64.6 g | 25.9 g | 7.3 g |" in content
-    assert "| 午餐 | 鸡胸肉 | 200 g | 330 kcal | 62 g | 0 g | 7 g | manual |" in content
-    assert "| 晚餐 | 米饭 | 100 g | 116 kcal | 2.6 g | 25.9 g | 0.3 g | xunji_sync |" in content
+    assert "# MyFitness 日报" in content
+    assert MOCK_REPORT_BODY in content
 
 
 def test_format_daily_report_md_no_training():

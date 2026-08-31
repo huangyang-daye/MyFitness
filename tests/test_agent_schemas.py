@@ -6,7 +6,6 @@ from myfitness.schemas.agent_outputs import (
     NutritionAgentOutput,
     SummaryAgentOutput,
 )
-from myfitness.schemas.constants import DISCLAIMER
 
 
 def test_body_agent_output_schema():
@@ -25,6 +24,6 @@ def test_fitness_agent_output_schema():
     assert out.agent == "fitness_planner"
 
 
-def test_summary_disclaimer():
+def test_summary_disclaimer_empty_by_default():
     out = SummaryAgentOutput(output_type="chat_reply", content_md="hello")
-    assert out.disclaimer == DISCLAIMER
+    assert out.disclaimer == ""

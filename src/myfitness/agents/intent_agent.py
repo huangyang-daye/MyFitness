@@ -60,11 +60,11 @@ def build_system_prompt(today: date) -> str:
 | intent | 定义 | 典型例句 |
 |---|---|---|
 | sync_trigger | 从训记 App 同步/拉取/更新数据到本地 | 同步今日数据 / 拉取训记 / 更新最近7天数据 |
-| report_trigger | 生成某一天**或某个日期区间**的一次性日报/晨报/报告 | 生成昨天的日报 / 出一份8月24日的报告 / 生成8月20日到8月25日的报告 |
+| report_trigger | 生成**完整**日报/晨报/综合健康报告（未限定单一主题） | 生成昨天的日报 / 出一份8月24日的报告 / 生成8月20日到8月25日的报告 |
 | chart_trigger | 画统计图（折线图、柱状图等），可生成文档或插入现有文档 | 生成最近7天体重折线图 / 把近30天体脂画成图插入昨天的日报 |
 | schedule_manage | 创建/查看/修改/取消**定时/每天/每日**重复任务 | 每天早上7点生成日报 / 查看定时任务 / 取消每天同步 |
 | data_query | 查询某天/某段时间**已记录**的数据 | 昨天吃了多少蛋白质 / 查询今天体重 / 8月21日练了什么 |
-| trend_analysis | 分析一段时间的**趋势/变化/对比** | 近30天体脂变化 / 对比近7天摄入和消耗 |
+| trend_analysis | 分析/报告某一主题的**变化/趋势/对比**（含领域专项报告） | 近30天体脂变化 / 体重变化报告 / 对比近7天摄入和消耗 / 近7天饮食分析报告 |
 | manual_entry | 手动录入体重/体脂/饮食等数据 | 记录体重72.5kg / 午餐吃了鸡胸肉200g / 添加早餐 |
 | plan_adjust | 调整训练计划（改休息/改内容/取消当天训练） | 今天不练了改成休息 / 把明天的训练改成有氧 |
 | goal_setting | 设定/修改身体目标 | 目标体重70kg / 设定体脂目标15% |
@@ -96,16 +96,24 @@ def build_system_prompt(today: date) -> str:
    例：「同步昨天和今天的数据」→ start = 昨天，end = 今天（覆盖两天）。
    注意：不要把「昨天和今天」只收敛成今天；必须包含提到的每一个日期。
 
+## 报告 vs 分析（易混淆，务必区分）
+1. **report_trigger** 仅用于完整日报/晨报/综合健康报告：
+   - 含「日报/晨报/综合报告/完整报告/健康报告」；
+   - 或「生成XX日的报告/XX到XX的报告」且**未限定单一主题**（如体重、饮食、训练）。
+2. **trend_analysis** 用于领域/主题专项报告或趋势分析：
+   - 含「变化/趋势/对比/分析」+「报告/分析」→ trend_analysis，并填对应 domain；
+   - 例：「体重变化报告」「近7天饮食分析报告」「近30天体脂变化」→ trend_analysis，**不是** report_trigger。
+3. 出现「折线图/趋势图/柱状图/统计图/画个图/可视化」等**明确要图**的措辞 → chart_trigger，
+   而不是 trend_analysis（后者只要文字分析）。
+   例：「近7天体重折线图」→ chart_trigger；「近7天体重变化」→ trend_analysis。
+4. 「把图插入到/加到…（已有日报/文档）」只做插入 → 只给 chart_trigger，
+   **不要**同时给 report_trigger（不重新生成报告）。
+
 ## 易混淆情况
 1. 出现「每天/每日/定时/固定」+ 任何动作 → schedule_manage，而**不是** report_trigger / sync_trigger。
    例：「每天8点同步数据」→ schedule_manage。
 2. 「生成日报」未指明日期时 date_range 填 null，由对话层向用户追问具体日期；指明日期则用该日期。
-3. data_query 与 trend_analysis 的区别：问「某天/某段是多少/有没有」是 data_query；问「变化/趋势/对比」是 trend_analysis。
-7. 出现「折线图/趋势图/柱状图/统计图/画个图/可视化」等**明确要图**的措辞 → chart_trigger，
-   而不是 trend_analysis（后者只要文字分析）。
-   例：「近7天体重折线图」→ chart_trigger；「近7天体重变化」→ trend_analysis。
-8. 「把图插入到/加到…（已有日报/文档）」只做插入 → 只给 chart_trigger，
-   **不要**同时给 report_trigger（不重新生成报告）。
+3. data_query 与 trend_analysis 的区别：问「某天/某段是多少/有没有」是 data_query；问「变化/趋势/对比/XX报告（有主题）」是 trend_analysis。
 4. 带数量描述的食物语句（吃了鸡胸肉200g、鸡蛋2个）→ manual_entry，不是 data_query。
 5. 「目标/降到/增到/减到 + 数值单位」→ goal_setting。
 6. 与健身数据无关的问候/闲聊/帮助请求 → general。
@@ -155,6 +163,12 @@ def build_system_prompt(today: date) -> str:
 
 用户：近30天体脂变化趋势
 输出：{{"intents": ["trend_analysis"], "domain": "body", "date_range": {{"start": "{month_start.isoformat()}", "end": "{today.isoformat()}"}}, "reasoning": "体脂趋势分析"}}
+
+用户：给我一个近7天的体重变化报告
+输出：{{"intents": ["trend_analysis"], "domain": "body", "date_range": {{"start": "{last_week_start.isoformat()}", "end": "{today.isoformat()}"}}, "reasoning": "体重变化专项报告"}}
+
+用户：近7天饮食分析报告
+输出：{{"intents": ["trend_analysis"], "domain": "nutrition", "date_range": {{"start": "{last_week_start.isoformat()}", "end": "{today.isoformat()}"}}, "reasoning": "饮食专项分析报告"}}
 
 用户：记录体重 72.5kg
 输出：{{"intents": ["manual_entry"], "domain": "body", "date_range": null, "reasoning": "手动录入体重"}}

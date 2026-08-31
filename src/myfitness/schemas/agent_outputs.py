@@ -7,8 +7,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from myfitness.schemas.constants import DISCLAIMER
-
 
 class CurrentMetrics(BaseModel):
     weight_kg: float | None = None
@@ -166,7 +164,7 @@ class SummaryAgentOutput(BaseModel):
     conflicts_resolved: list[ConflictResolved] = Field(default_factory=list)
     action_items: list[ActionItem] = Field(default_factory=list)
     data_quality_notes: list[str] = Field(default_factory=list)
-    disclaimer: str = DISCLAIMER
+    disclaimer: str = ""
 
 
 class AgentOutputs(BaseModel):

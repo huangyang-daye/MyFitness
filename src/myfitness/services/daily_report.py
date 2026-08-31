@@ -64,6 +64,8 @@ def run_daily_report(
     *,
     sync_first: bool = True,
     lookback_days: int = 30,
+    user_message: str = "",
+    domain: str | None = None,
 ) -> dict:
     """生成单日日报：可选先同步，再跑三 Agent + Summary，持久化并写文件。
 
@@ -92,6 +94,8 @@ def run_daily_report(
         report_date,
         sync_result=sync_result,
         lookback_days=lookback_days,
+        user_message=user_message,
+        domain=domain,
     )
     result["sync"] = sync_result
     return result

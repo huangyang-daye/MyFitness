@@ -92,6 +92,12 @@ def _reconcile(llm: RouteResult, keyword: RouteResult | None) -> RouteResult:
     if keyword is not None:
         if llm.intent == Intent.GENERAL and keyword.intent != Intent.GENERAL:
             return keyword
+        if (
+            llm.has(Intent.REPORT_TRIGGER)
+            and keyword.has(Intent.TREND_ANALYSIS)
+            and keyword.domain
+        ):
+            return keyword
         handles_date_range = (
             llm.has(Intent.SYNC_TRIGGER)
             or llm.has(Intent.REPORT_TRIGGER)
@@ -123,12 +129,41 @@ def _is_confirmation_response(text: str) -> bool:
 
 
 def _is_report_request(text: str) -> bool:
-    """一次性日报请求（排除定时/每天/每日/自动等重复任务表达）。"""
+    """一次性完整日报请求（排除定时/每天/每日/自动及领域专项报告）。"""
     if any(k in text for k in _SCHEDULE_WORDS):
+        return False
+    if _is_focused_topic_report(text):
         return False
     return any(k in text for k in ("日报", "晨报")) or bool(
         re.search(r"生成.*(?:日报|报告|晨报)", text)
     )
+
+
+def _is_focused_topic_report(text: str) -> bool:
+    """领域/主题明确的专项报告或趋势分析，走 trend_analysis 而非完整日报。"""
+    if any(k in text for k in _SCHEDULE_WORDS):
+        return False
+    if any(k in text for k in ("日报", "晨报", "综合报告", "完整报告", "健康报告")):
+        return False
+    has_topic_focus = bool(
+        re.search(
+            r"(变化|趋势|对比|分析).*(报告|分析)|(?:报告|分析).*(变化|趋势|对比|分析)",
+            text,
+        )
+    )
+    # 「生成 + 日期/区间 + 报告」= 完整周期报告（即使后面提到某指标折线图）
+    if re.search(r"生成\s*.+(?:报告|日报)", text) and not has_topic_focus:
+        return False
+
+    domain = _infer_domain_from_text(text)
+    if not domain:
+        return False
+    if has_topic_focus:
+        return True
+    # 「近N天 + 领域 + 报告/分析」如「近7天体重报告」
+    if re.search(r"近\s*\d+\s*天", text) and re.search(r"(报告|分析)", text):
+        return True
+    return False
 
 
 def _keyword_classify(text: str, today: date | None = None) -> RouteResult | None:
@@ -143,6 +178,16 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
 
     # 「把体重折线图插入到8月24日的日报」只是插入图表，不该触发生成新日报
     insert_only = is_chart_request(text) and any(k in text for k in INSERT_DOC_KEYWORDS)
+
+    # 领域专项报告 / 趋势分析（优先于完整日报）
+    if _is_focused_topic_report(text):
+        start, end = _parse_action_date_range(text, today)
+        return RouteResult(
+            intents=[Intent.TREND_ANALYSIS],
+            domain=_infer_domain_from_text(text),
+            start_date=start,
+            end_date=end,
+        )
 
     # 可组合的动作意图：同步 + 日报 + 统计图（按顺序执行）
     action_intents: list[Intent] = []
@@ -185,7 +230,13 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
         )
 
     if re.search(r"(最?\s*近\s*\d+\s*天|近\s*\d+\s*天|趋势|变化|对比)", text):
-        return RouteResult(Intent.TREND_ANALYSIS)
+        start, end = _parse_action_date_range(text, today)
+        return RouteResult(
+            Intent.TREND_ANALYSIS,
+            domain=_infer_domain_from_text(text),
+            start_date=start,
+            end_date=end,
+        )
 
     if re.search(r"(最?\s*近\s*\d+\s*天|近\s*\d+\s*天).*(蛋白|热量|体重|训练|吃)", text):
         return RouteResult(Intent.DATA_QUERY, domain=_infer_domain_from_text(text))

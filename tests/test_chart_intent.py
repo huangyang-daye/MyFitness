@@ -76,6 +76,12 @@ def test_router_trend_analysis_without_chart_words():
     assert result.intent == Intent.TREND_ANALYSIS
 
 
+def test_router_focused_weight_change_report():
+    result = classify_intent("给我一个近7天的体重变化报告", use_llm=False)
+    assert result.intent == Intent.TREND_ANALYSIS
+    assert result.domain == "body"
+
+
 def test_router_still_recognizes_report_and_schedule():
     assert (
         classify_intent("生成昨天的日报", use_llm=False).intent == Intent.REPORT_TRIGGER
