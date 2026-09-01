@@ -24,7 +24,7 @@ from myfitness.agents.schedule_parser import (
     format_schedule_list,
     parse_schedule_request,
 )
-from myfitness.agents.summary import iter_summary_reply, run_summary_agent, should_stream_summary
+from myfitness.agents.summary import iter_summary_reply, run_summary_agent, sanitize_user_facing_reply, should_stream_summary
 from myfitness.agents.tools.base import invoke_tool
 from myfitness.agents.tools.chart_tools import (
     generate_chart,
@@ -41,6 +41,14 @@ from myfitness.agents.tools.schedule_tools import (
     list_scheduled_tasks,
 )
 from myfitness.agents.tools.write_tools import apply_body_manual_write, apply_nutrition_manual_write
+from myfitness.agents.tools.document_tools import (
+    apply_document_export,
+    format_document_saved_reply,
+    infer_document_formats,
+    is_document_generation_request,
+    needs_document_write,
+    wants_minimal_chat_for_document,
+)
 from myfitness.config import get_settings
 from myfitness.graph.orchestrator import resume_pending_plan, run_orchestrated_turn
 from myfitness.graph.planner import should_use_orchestrator
@@ -91,6 +99,7 @@ def run_chat_turn(
         for chunk in iter_chat_reply(result.state):
             parts.append(chunk)
         result.state.reply = "".join(parts)
+        _maybe_export_document(session, result.state, result.state.reply)
         _append_assistant(result.state)
     elif not result.state.reply:
         _finalize_rule_summary(result.state)
@@ -197,6 +206,8 @@ def prepare_chat_turn(
         state.errors.extend(execution.errors)
         summary = execution.agent_outputs.summary
         state.reply = summary.content_md if summary else execution.summary_text()
+        if needs_document_write(state.user_message):
+            _maybe_export_document(session, state, state.reply, attach_reply=not use_stream)
         if not use_stream:
             _append_assistant(state)
         return ChatTurnResult(state=state, stream=use_stream)
@@ -248,8 +259,10 @@ def prepare_chat_turn(
 
     use_stream = (
         use_llm
-        and should_stream_summary(route.intent)
+        and should_stream_summary(route.intent, state.user_message)
     )
+    if needs_document_write(state.user_message):
+        _maybe_export_document(session, state, state.reply or "", attach_reply=False)
     return ChatTurnResult(state=state, stream=use_stream)
 
 
@@ -265,17 +278,32 @@ def iter_chat_turn(
     if result.state.reply:
         return result.state, iter([result.state.reply])
     _finalize_rule_summary(result.state)
+    _maybe_export_document(session, result.state, result.state.reply)
     _append_assistant(result.state)
     return result.state, iter([result.state.reply])
 
 
-def finalize_streamed_reply(state: MyFitnessGraphState, reply: str) -> MyFitnessGraphState:
+def finalize_streamed_reply(
+    state: MyFitnessGraphState,
+    reply: str,
+    *,
+    session: Session | None = None,
+) -> MyFitnessGraphState:
     """流式输出结束后写入 state.reply 与对话历史。"""
-    state.reply = reply
+    state.reply = sanitize_user_facing_reply(reply)
+    if session is not None:
+        if not _document_exported(state):
+            _maybe_export_document(session, state, state.reply)
+        else:
+            _maybe_append_document_notice(state)
     if not state.messages or state.messages[-1].role != "assistant":
         _append_assistant(state)
     else:
-        state.messages[-1].content = reply
+        state.messages[-1].content = state.reply
+        if state.pending_artifacts:
+            existing = list(state.messages[-1].artifacts)
+            state.messages[-1].artifacts = existing + list(state.pending_artifacts)
+            state.pending_artifacts = []
     return state
 
 
@@ -445,6 +473,9 @@ def _handle_pending_clarification(session: Session, state: MyFitnessGraphState) 
 
     start_date, end_date = parse_date_range_text(text)
     if start_date is None:
+        if is_document_generation_request(text):
+            state.pending_confirmation = None
+            return False
         state.reply = (
             "还需要一个具体日期。请回复例如：昨天、今天、8月24日、2026-08-24，"
             "或一个区间如「8月20日到8月25日」。"
@@ -779,6 +810,95 @@ def _record_artifact(
             created_at=datetime.now(UTC),
         )
     )
+
+
+def _document_exported(state: MyFitnessGraphState) -> bool:
+    if not needs_document_write(state.user_message):
+        return True
+    requested = set(infer_document_formats(state.user_message))
+    exported = _exported_document_formats(state)
+    return requested.issubset(exported)
+
+
+def _exported_document_formats(state: MyFitnessGraphState) -> set[str]:
+    paths: list[str] = []
+    for item in state.pending_artifacts:
+        if item.kind == "document" and item.path:
+            paths.append(str(item.path))
+    if state.messages and state.messages[-1].role == "assistant":
+        for item in state.messages[-1].artifacts:
+            if item.kind == "document" and item.path:
+                paths.append(str(item.path))
+
+    formats: set[str] = set()
+    for path in paths:
+        ext = Path(path).suffix.lower().lstrip(".")
+        if ext == "markdown":
+            ext = "md"
+        if ext in {"pdf", "docx", "md"}:
+            formats.add(ext)
+    return formats
+
+
+def _maybe_export_document(
+    session: Session,
+    state: MyFitnessGraphState,
+    content_md: str,
+    *,
+    attach_reply: bool = True,
+) -> None:
+    if _document_exported(state):
+        return
+    result = apply_document_export(
+        session,
+        state.user_id,
+        state.user_message,
+        content_md,
+        agent_outputs=state.agent_outputs,
+        context=state.context,
+    )
+    if not result:
+        return
+
+    exports = result.get("exports") or ([result] if result.get("path") else [])
+    errors = [item for item in exports if item.get("error")]
+    successes = [item for item in exports if item.get("path") and not item.get("error")]
+
+    if errors and attach_reply and not successes:
+        _append_to_reply(state, f"文档保存失败：{errors[0]['error']}")
+        return
+
+    _record_tool(state, "write_document")
+    for item in successes:
+        title = Path(item.get("filename", "文档")).stem
+        _record_artifact(
+            state,
+            kind="document",
+            title=title,
+            subtitle=item.get("filename", ""),
+            path=item.get("path"),
+        )
+
+    if not attach_reply:
+        return
+    if result.get("document_only"):
+        state.reply = format_document_saved_reply(result)
+        if state.messages and state.messages[-1].role == "assistant":
+            state.messages[-1].content = state.reply
+    else:
+        for item in successes:
+            _append_to_reply(state, f"已保存文档：{item['path']}")
+        for item in errors:
+            _append_to_reply(state, f"文档保存失败（{item.get('format', '?')}）：{item['error']}")
+
+
+def _maybe_append_document_notice(state: MyFitnessGraphState) -> None:
+    for artifact in state.pending_artifacts:
+        if artifact.kind != "document" or not artifact.path:
+            continue
+        if artifact.path in (state.reply or ""):
+            continue
+        _append_to_reply(state, f"已保存文档：{artifact.path}")
 
 
 def _record_report_artifact(state: MyFitnessGraphState, result: dict | None) -> None:

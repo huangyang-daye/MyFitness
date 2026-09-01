@@ -12,7 +12,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from myfitness.chat_history import (
     ChatHistoryError,
@@ -33,13 +33,25 @@ from myfitness.llm.registry import ModelRegistryError, get_registry
 from myfitness.paths import PROJECT_ROOT
 from myfitness.rag.document_parser import MAX_FILE_BYTES, DocumentParseError, parse_document
 from myfitness.rag.knowledge_service import KnowledgeError, KnowledgeNotFound
-from myfitness.services.artifacts import ArtifactError, read_artifact
+from myfitness.services.artifacts import ArtifactError, read_artifact, read_artifact_bytes
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parents[1] / "web_static"
 PROBE_TIMEOUT = 30
 MAX_JSON_BYTES = 100_000
 MAX_UPLOAD_BYTES = MAX_FILE_BYTES + 64_000
+
+
+def inline_content_disposition(filename: str) -> str:
+    """生成可含中文文件名的 inline Content-Disposition（RFC 5987）。"""
+    suffix = Path(filename).suffix or ".bin"
+    ascii_name = "".join(
+        ch if ch.isascii() and ch not in {'"', "\\"} else "_" for ch in filename
+    ).strip("._")
+    if not ascii_name:
+        ascii_name = f"artifact{suffix}"
+    encoded = quote(filename, safe="")
+    return f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
 TASK_TYPES = {
     ScheduledTaskRepository.TASK_DAILY_REPORT: "生成健康日报",
     ScheduledTaskRepository.TASK_SYNC: "同步训记数据",
@@ -271,7 +283,7 @@ class AgentWebApplication:
                         continue
                     reply_parts.append(chunk)
                     emit_event("delta", {"text": chunk})
-                finalize_streamed_reply(state, "".join(reply_parts))
+                finalize_streamed_reply(state, "".join(reply_parts), session=session)
             self.history.save(state)
             payload = self.session_payload(state.session_id)
             payload.update({"reply": state.reply, "progress": progress})
@@ -291,6 +303,11 @@ class AgentWebApplication:
     def read_artifact_file(self, path: str) -> dict[str, Any]:
         """读取会话产物内容；路径必须落在 data_dir 之内。"""
         return read_artifact(path)
+
+    def artifact_file_payload(self, path: str) -> tuple[bytes, str, str]:
+        """返回产物二进制、Content-Type 与文件名。"""
+        target, payload, content_type = read_artifact_bytes(path)
+        return payload, content_type, target.name
 
     # ------------------------------------------------------------------- 模型
     def list_models(self) -> dict[str, Any]:
@@ -473,6 +490,10 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
                     self.server.app.read_artifact_file(query.get("path", [""])[0])
                 )
                 return
+            if parsed.path == "/api/artifact/file":
+                query = parse_qs(parsed.query)
+                self._serve_artifact_file(query.get("path", [""])[0])
+                return
             self._serve_static(parsed.path)
         except Exception as exc:  # noqa: BLE001 - HTTP exception boundary
             self._handle_error(exc)
@@ -601,6 +622,17 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
         if len(payload) > MAX_FILE_BYTES:
             raise ValueError(f"文件不能超过 {MAX_FILE_BYTES // (1024 * 1024)}MB")
         return filename, payload
+
+    def _serve_artifact_file(self, path: str) -> None:
+        payload, content_type, filename = self.server.app.artifact_file_payload(path)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Content-Disposition", inline_content_disposition(filename))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(payload)
 
     def _serve_static(self, request_path: str) -> None:
         name = "index.html" if request_path in {"", "/"} else request_path.lstrip("/")

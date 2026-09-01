@@ -11,6 +11,11 @@ from myfitness.agents.tools.base import invoke_tool
 from myfitness.agents.tools.query_planner import QueryPlan, build_query_plan
 from myfitness.agents.tools.query_tools import execute_query_plan
 from myfitness.agents.tools.web_search import build_search_query, needs_web_search, search_web
+from myfitness.agents.tools.document_tools import (
+    extract_document_path,
+    needs_document_read,
+    read_document_file,
+)
 from myfitness.db.models import BodyMetric
 from myfitness.graph.progress import ProgressCallback, emit, label_for
 from myfitness.rag.pipeline import retrieve_for_turn
@@ -108,6 +113,32 @@ def load_context_for_turn(
             context = context.model_copy(update={"web_search_results": hits})
         elif search_result.get("error"):
             tools_invoked.append("web_search")
+
+    doc_path = extract_document_path(message)
+    if doc_path or needs_document_read(message):
+        emit(on_progress, f"{label_for('read_document')}…")
+        if doc_path:
+            try:
+                doc_result = read_document_file(doc_path)
+                tools_invoked.append("read_document")
+                context = context.model_copy(
+                    update={
+                        "query_results": {
+                            **(context.query_results or {}),
+                            "document": doc_result,
+                        }
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                tools_invoked.append("read_document")
+                context = context.model_copy(
+                    update={
+                        "data_gaps": [
+                            *(context.data_gaps or []),
+                            f"读取文档失败：{exc}",
+                        ]
+                    }
+                )
 
     return context, tools_invoked
 

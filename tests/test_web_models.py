@@ -1,6 +1,6 @@
 import pytest
 
-from myfitness.api.web import AgentWebApplication
+from myfitness.api.web import AgentWebApplication, inline_content_disposition
 from myfitness.llm.factory import LlmConfig
 from myfitness.llm.registry import ModelRegistryError
 from myfitness.services.artifacts import ArtifactError
@@ -85,6 +85,13 @@ def test_model_probe_reports_failure_without_raising(web_app, monkeypatch):
 def test_model_probe_requires_credentials(web_app):
     with pytest.raises(ValueError, match="API Key"):
         web_app.test_model({"base_url": "https://x/v1", "model": "m"})
+
+
+def test_inline_content_disposition_supports_unicode_filename():
+    header = inline_content_disposition("减重期训练建议.pdf")
+    header.encode("latin-1")  # http.server 仅允许 latin-1 响应头
+    assert "filename*=" in header
+    assert "%E5%87%8F%E9%87%8D" in header
 
 
 def test_read_artifact_scoped_to_data_dir(web_app, tmp_path, monkeypatch):

@@ -10,7 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from myfitness.agents.document_blocks import docx_to_preview_html
 from myfitness.config import Settings, get_settings
+from myfitness.rag.document_parser import DocumentParseError, parse_document
 
 MAX_CHARS = 400_000  # 约 400 KB，超出截断以免前端渲染卡死
 
@@ -25,12 +27,15 @@ def artifact_root(settings: Settings | None = None) -> Path:
 
 def resolve_artifact(path: str, settings: Settings | None = None) -> Path:
     """校验产物路径落在 data_dir 之内，返回解析后的绝对路径。"""
-    raw = str(path or "").strip()
+    raw = str(path or "").strip().strip('"')
     if not raw:
         raise ArtifactError("缺少产物路径")
     root = artifact_root(settings)
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = root / candidate
     try:
-        target = Path(raw).expanduser().resolve(strict=False)
+        target = candidate.expanduser().resolve(strict=False)
     except (OSError, ValueError) as exc:  # Windows 非法盘符 / 过长路径
         raise ArtifactError(f"产物路径无效：{raw}") from exc
     if not target.is_relative_to(root):
@@ -40,24 +45,73 @@ def resolve_artifact(path: str, settings: Settings | None = None) -> Path:
     return target
 
 
+def _artifact_kind(posix: str) -> str:
+    if "/charts/" in f"/{posix}":
+        return "chart"
+    if "/documents/" in f"/{posix}":
+        return "document"
+    return "report"
+
+
 def read_artifact(path: str, settings: Settings | None = None) -> dict[str, Any]:
-    """读取产物内容（UTF-8，超长截断），返回可直接下发给前端的结构。"""
+    """读取产物元数据与可预览内容，返回可直接下发给前端的结构。"""
     target = resolve_artifact(path, settings)
+    stat = target.stat()
+    posix = target.as_posix()
+    ext = target.suffix.lower()
+    base: dict[str, Any] = {
+        "path": posix,
+        "name": target.name,
+        "title": target.stem,
+        "kind": _artifact_kind(posix),
+        "size": stat.st_size,
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
+        "format": ext.lstrip(".") or "txt",
+        "truncated": False,
+    }
+
+    if ext == ".pdf":
+        return {
+            **base,
+            "preview_type": "pdf",
+            "content": "",
+            "preview_html": "",
+        }
+
+    if ext in {".docx", ".doc"}:
+        data = target.read_bytes()
+        try:
+            preview_html = docx_to_preview_html(data)
+        except DocumentParseError as exc:
+            raise ArtifactError(str(exc)) from exc
+        return {
+            **base,
+            "preview_type": "docx_html",
+            "preview_html": preview_html,
+            "content": "",
+        }
+
     raw = target.read_bytes()
     content = raw.decode("utf-8", errors="replace")
     truncated = len(content) > MAX_CHARS
     if truncated:
         content = content[:MAX_CHARS] + "\n\n…（内容过长，已截断显示）"
-
-    stat = target.stat()
-    posix = target.as_posix()
     return {
-        "path": posix,
-        "name": target.name,
-        "title": target.stem,
-        "kind": "chart" if "/charts/" in f"/{posix}" else "report",
-        "size": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
+        **base,
+        "preview_type": "markdown",
         "content": content,
+        "preview_html": "",
         "truncated": truncated,
     }
+
+
+def read_artifact_bytes(path: str, settings: Settings | None = None) -> tuple[Path, bytes, str]:
+    """读取产物原始字节，供浏览器内嵌预览 PDF 等二进制文件。"""
+    target = resolve_artifact(path, settings)
+    ext = target.suffix.lower()
+    content_type = {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".doc": "application/msword",
+    }.get(ext, "application/octet-stream")
+    return target, target.read_bytes(), content_type

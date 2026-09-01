@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -23,6 +24,11 @@ from myfitness.config import get_settings
 from myfitness.schemas.state import MyFitnessGraphState
 
 SCHEMA_VERSION = 1
+_EXPORT_TAIL_RE = re.compile(
+    r"[，,]?\s*(?:产出|保存|导出|输出|写成|整理成|生成).{0,48}"
+    r"(?:pdf|docx|md|word|markdown|文档).*$",
+    re.IGNORECASE,
+)
 
 
 class ChatHistoryError(ValueError):
@@ -148,11 +154,12 @@ class ChatHistoryStore:
                 if path.stem != canonical or state.session_id != canonical:
                     continue
                 messages = state.messages
-                preview = messages[-1].content.strip()[:100] if messages else ""
+                first_user = next((m.content.strip() for m in messages if m.role == "user"), "")
+                preview = summarize_session_title(first_user) if first_user else ""
                 summaries.append(
                     ChatSessionSummary(
                         session_id=canonical,
-                        title=str(document.get("title") or "新对话"),
+                        title=summarize_session_title(first_user) if first_user else str(document.get("title") or "新对话"),
                         created_at=str(document.get("created_at") or ""),
                         updated_at=str(document.get("updated_at") or ""),
                         message_count=len(messages),
@@ -187,5 +194,34 @@ class ChatHistoryStore:
         first_user = next((m.content.strip() for m in state.messages if m.role == "user"), "")
         if not first_user:
             return "新对话"
-        one_line = " ".join(first_user.split())
-        return one_line if len(one_line) <= 32 else f"{one_line[:32]}…"
+        return summarize_session_title(first_user)
+
+
+def summarize_session_title(message: str) -> str:
+    """把用户首条消息压缩为侧栏可读的会话摘要。"""
+    text = _EXPORT_TAIL_RE.sub("", message.strip()).strip(" ，,。.")
+    if not text:
+        text = message.strip()
+
+    if re.search(r"训练建议|训练计划|怎么练|训练记录", text):
+        if re.search(r"减重|减脂|减肥", text):
+            return "减重期训练建议"
+        return "训练建议"
+    if re.search(r"饮食规划|饮食计划|吃什么|营养", text):
+        return "饮食规划"
+    if re.search(r"减肥|减脂|减重", text):
+        return "减重管理"
+    if re.search(r"体重|体脂|围度", text):
+        return "身体数据"
+
+    for sep in ("，", ",", "。", "？", "?", "；", ";"):
+        if sep in text:
+            text = text.split(sep, 1)[0]
+            break
+    text = re.sub(r"^(?:根据最近的?|根据|请|帮我|给我|能不能|可以)", "", text).strip()
+    one_line = " ".join(text.split())
+    if not one_line:
+        return "新对话"
+    if len(one_line) <= 24:
+        return one_line
+    return f"{one_line[:24]}…"

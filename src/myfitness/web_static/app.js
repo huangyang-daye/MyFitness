@@ -1,7 +1,15 @@
 const LAYOUT_KEY = "myfitness.layout";
+const SIDEBAR_WIDTH_KEY = "myfitness.sidebarWidth";
+const INSPECTOR_WIDTH_KEY = "myfitness.inspectorWidth";
 const THEME_KEY = "myfitness.theme";
 const NARROW_INSPECTOR = 1180;
 const NARROW_SIDEBAR = 760;
+const SIDEBAR_WIDTH_MIN = 220;
+const SIDEBAR_WIDTH_MAX = 480;
+const SIDEBAR_WIDTH_DEFAULT = 272;
+const INSPECTOR_WIDTH_MIN = 280;
+const INSPECTOR_WIDTH_MAX = 560;
+const INSPECTOR_WIDTH_DEFAULT = 360;
 
 const state = {
   sessions: [],
@@ -20,6 +28,7 @@ const state = {
   knowledge: [],
   editingKnowledgeId: null,
   artifacts: [],
+  artifactPdfUrl: null,
   openArtifactPath: null,
   theme: "dark",
 };
@@ -382,6 +391,111 @@ function togglePanel(name) {
   setPanel(name, !panelOpen(name));
 }
 
+function clampSidebarWidth(value) {
+  return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, value));
+}
+
+function clampInspectorWidth(value) {
+  return Math.min(INSPECTOR_WIDTH_MAX, Math.max(INSPECTOR_WIDTH_MIN, value));
+}
+
+function readOpenWidth(cssVar, fallback) {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(cssVar).trim();
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function applyOpenWidth(cssVar, width, clampFn) {
+  document.documentElement.style.setProperty(cssVar, `${clampFn(width)}px`);
+}
+
+function persistOpenWidth(storageKey, width, clampFn) {
+  try {
+    localStorage.setItem(storageKey, String(clampFn(width)));
+  } catch { /* 隐私模式下 localStorage 不可用，忽略 */ }
+}
+
+function initPanelResize({
+  handleId,
+  cssVar,
+  storageKey,
+  defaultWidth,
+  clampFn,
+  panelName,
+  direction,
+}) {
+  const handle = el(handleId);
+  if (!handle) return;
+
+  let savedWidth = defaultWidth;
+  try {
+    const stored = Number.parseInt(localStorage.getItem(storageKey) || "", 10);
+    if (Number.isFinite(stored)) savedWidth = stored;
+  } catch { /* ignore */ }
+  applyOpenWidth(cssVar, savedWidth, clampFn);
+
+  let dragging = false;
+  let startX = 0;
+  let startWidth = savedWidth;
+
+  const canResize = () => {
+    if (document.body.classList.contains(`hide-${panelName}`)) return false;
+    if (!isNarrow(panelName)) return true;
+    return panelNode(panelName).classList.contains("open");
+  };
+
+  const stopDragging = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("panel-resizing");
+    persistOpenWidth(storageKey, readOpenWidth(cssVar, defaultWidth), clampFn);
+    if (event?.pointerId != null && handle.hasPointerCapture(event.pointerId)) {
+      handle.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (!canResize() || event.button !== 0) return;
+    dragging = true;
+    startX = event.clientX;
+    startWidth = readOpenWidth(cssVar, defaultWidth);
+    document.body.classList.add("panel-resizing");
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+
+  handle.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const delta = (event.clientX - startX) * direction;
+    applyOpenWidth(cssVar, startWidth + delta, clampFn);
+  });
+
+  handle.addEventListener("pointerup", stopDragging);
+  handle.addEventListener("pointercancel", stopDragging);
+  window.addEventListener("blur", () => stopDragging());
+}
+
+function initPanelResizes() {
+  initPanelResize({
+    handleId: "sidebarResizeHandle",
+    cssVar: "--sidebar-open-width",
+    storageKey: SIDEBAR_WIDTH_KEY,
+    defaultWidth: SIDEBAR_WIDTH_DEFAULT,
+    clampFn: clampSidebarWidth,
+    panelName: "sidebar",
+    direction: 1,
+  });
+  initPanelResize({
+    handleId: "inspectorResizeHandle",
+    cssVar: "--inspector-open-width",
+    storageKey: INSPECTOR_WIDTH_KEY,
+    defaultWidth: INSPECTOR_WIDTH_DEFAULT,
+    clampFn: clampInspectorWidth,
+    panelName: "inspector",
+    direction: -1,
+  });
+}
+
 function initLayout() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}") || {}; } catch { saved = {}; }
@@ -478,7 +592,7 @@ function artifactCardsHtml(artifacts) {
   if (!artifacts || !artifacts.length) return "";
   const cards = artifacts.map((artifact) => `
     <button class="artifact-card" data-artifact-path="${escapeHtml(artifact.path)}">
-      <span class="artifact-card-icon ${artifact.kind === "chart" ? "chart" : "report"}">${artifact.kind === "chart" ? "◫" : "▤"}</span>
+      <span class="artifact-card-icon ${artifact.kind === "chart" ? "chart" : artifact.kind === "document" ? "document" : "report"}">${artifact.kind === "chart" ? "◫" : artifact.kind === "document" ? "📄" : "▤"}</span>
       <span class="artifact-card-copy">
         <strong>${escapeHtml(artifact.title || "会话产物")}</strong>
         <small>${escapeHtml([artifact.subtitle, artifact.path].filter(Boolean).join(" · "))}</small>
@@ -523,7 +637,7 @@ function renderArtifactList() {
   }
   container.innerHTML = [...state.artifacts].reverse().map((artifact) => `
     <button class="artifact-row ${state.openArtifactPath === artifact.path ? "active" : ""}" data-artifact-path="${escapeHtml(artifact.path)}">
-      <span class="artifact-row-icon ${artifact.kind === "chart" ? "chart" : "report"}">${artifact.kind === "chart" ? "◫" : "▤"}</span>
+      <span class="artifact-row-icon ${artifact.kind === "chart" ? "chart" : artifact.kind === "document" ? "document" : "report"}">${artifact.kind === "chart" ? "◫" : artifact.kind === "document" ? "📄" : "▤"}</span>
       <span class="artifact-row-copy">
         <strong>${escapeHtml(artifact.title || "会话产物")}</strong>
         <small>${escapeHtml(artifact.subtitle || (artifact.kind === "chart" ? "统计图" : "报告"))}</small>
@@ -532,6 +646,30 @@ function renderArtifactList() {
   container.querySelectorAll("[data-artifact-path]").forEach((button) => {
     button.addEventListener("click", () => openArtifact(button.dataset.artifactPath));
   });
+}
+
+async function renderPdfArtifact(path, name, container) {
+  if (state.artifactPdfUrl) {
+    URL.revokeObjectURL(state.artifactPdfUrl);
+    state.artifactPdfUrl = null;
+  }
+  const response = await fetch(`/api/artifact/file?path=${encodeURIComponent(path)}`);
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) detail = payload.error;
+    } catch { /* ignore */ }
+    throw new Error(`PDF 加载失败：${detail}`);
+  }
+  const blob = await response.blob();
+  if (!blob.size) throw new Error("PDF 文件为空");
+  const objectUrl = URL.createObjectURL(blob);
+  state.artifactPdfUrl = objectUrl;
+  container.innerHTML = `
+    <embed class="artifact-pdf-frame" type="application/pdf" src="${objectUrl}" title="${escapeHtml(name)}" />
+    <a class="artifact-pdf-open" href="${objectUrl}" target="_blank" rel="noopener noreferrer">在新标签页打开 PDF</a>
+  `;
 }
 
 async function openArtifact(path) {
@@ -546,10 +684,20 @@ async function openArtifact(path) {
   try {
     const data = await api(`/api/artifact?path=${encodeURIComponent(path)}`);
     el("artifactName").textContent = data.name;
-    const kind = data.kind === "chart" ? "统计图" : "报告";
-    el("artifactMeta").textContent = `${kind} · ${formatSize(data.size)} · ${relativeTime(data.modified_at)}`;
-    el("artifactBody").innerHTML = renderMarkdown(data.content);
-    hydrateMermaid(el("artifactBody"));
+    const kind = data.kind === "chart" ? "统计图" : data.kind === "document" ? "文档" : "报告";
+    const formatLabel = data.format ? data.format.toUpperCase() : "";
+    el("artifactMeta").textContent = [kind, formatLabel, formatSize(data.size), relativeTime(data.modified_at)]
+      .filter(Boolean)
+      .join(" · ");
+    const body = el("artifactBody");
+    if (data.preview_type === "pdf") {
+      await renderPdfArtifact(path, data.name, body);
+    } else if (data.preview_type === "docx_html") {
+      body.innerHTML = `<div class="artifact-docx-preview">${data.preview_html || ""}</div>`;
+    } else {
+      body.innerHTML = renderMarkdown(data.content || "");
+      hydrateMermaid(body);
+    }
   } catch (error) {
     el("artifactName").textContent = "读取失败";
     el("artifactBody").innerHTML = `<div class="artifact-loading">${escapeHtml(error.message)}</div>`;
@@ -559,6 +707,10 @@ async function openArtifact(path) {
 
 function closeArtifactView() {
   state.openArtifactPath = null;
+  if (state.artifactPdfUrl) {
+    URL.revokeObjectURL(state.artifactPdfUrl);
+    state.artifactPdfUrl = null;
+  }
   el("artifactView").classList.add("hidden");
   renderArtifactList();
 }
@@ -1431,6 +1583,7 @@ function bindEvents() {
 
 async function init() {
   initTheme();
+  initPanelResizes();
   initLayout();
   bindEvents();
   resetModelForm();

@@ -35,6 +35,9 @@ TOOL_LABELS: dict[str, str] = {
     "chart": "生成统计图",
     "memory": "整理记忆",
     "web_search": "联网检索",
+    "read_document": "读取文档",
+    "write_document": "生成文档",
+    "list_documents": "列出文档",
 }
 
 

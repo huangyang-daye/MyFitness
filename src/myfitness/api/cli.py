@@ -1436,7 +1436,7 @@ def chat(
                     console.print(chunk, end="")
                     reply_parts.append(chunk)
                 console.print("\n")
-                finalize_streamed_reply(state, "".join(reply_parts))
+                finalize_streamed_reply(state, "".join(reply_parts), session=session)
             history.save(state)
             snap = get_llm_guard().snapshot()
             if snap["state"] == "open":

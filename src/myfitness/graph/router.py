@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from myfitness.agents.tools.chart_tools import INSERT_DOC_KEYWORDS, is_chart_request
+from myfitness.agents.tools.document_tools import is_document_generation_request
 from myfitness.agents.tools.web_search import is_web_search_request
 from myfitness.debug import log_intent_result
 from myfitness.schemas.state import Intent, PendingConfirmation, RouteResult
@@ -137,6 +138,8 @@ def _is_confirmation_response(text: str) -> bool:
 
 def _is_report_request(text: str) -> bool:
     """一次性完整日报请求（排除定时/每天/每日/自动、领域专项报告、纯插入图表）。"""
+    if is_document_generation_request(text):
+        return False
     if any(k in text for k in _SCHEDULE_WORDS):
         return False
     if _is_focused_topic_report(text):
@@ -196,6 +199,18 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
         and any(k in text for k in INSERT_DOC_KEYWORDS)
         and not _is_report_request(text)
     )
+
+    # 主题文档生成（饮食规划、训练计划等）——不是日报，走分析 + 写文档
+    if is_document_generation_request(text) and not is_chart_request(text):
+        domain = _infer_domain_from_text(text)
+        if domain is None and re.search(r"饮食|营养|餐|规划", text):
+            domain = "nutrition"
+        if domain is None and re.search(r"训练|健身", text):
+            domain = "fitness"
+        return RouteResult(
+            intents=[Intent.TREND_ANALYSIS if domain else Intent.GENERAL],
+            domain=domain,
+        )
 
     # 领域专项报告 / 趋势分析（优先于完整日报）
     if _is_focused_topic_report(text):
@@ -353,7 +368,7 @@ def _iter_explicit_dates(text: str, today: date) -> Iterator[date]:
             seen.add(key)
             yield d
     # M.D / M/D（点号分隔，避免与小数体重等混淆：要求整体像日期）
-    for m in re.finditer(r"(?<!\d)(\d{1,2})[./](\d{1,2})(?!\d)", text):
+    for m in re.finditer(r"(?<!\d)([1-9]\d?)[./](\d{1,2})(?!\d)", text):
         month, day = int(m.group(1)), int(m.group(2))
         if not (1 <= month <= 12 and 1 <= day <= 31):
             continue

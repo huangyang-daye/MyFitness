@@ -258,3 +258,30 @@ def test_classify_llm_range_not_narrowed_by_keyword_subset():
 
     assert result.start_date == date(2026, 8, 26)
     assert result.end_date == today
+
+
+def test_document_generation_routes_to_trend_not_report():
+    result = classify_intent(
+        "给我生成饮食规划的文档，不要输出其他内容，文档里也不要出现无关内容",
+        use_llm=False,
+    )
+    assert result.intent == Intent.TREND_ANALYSIS
+    assert result.domain == "nutrition"
+    assert Intent.REPORT_TRIGGER not in result.intents
+
+
+def test_document_generation_reconciles_over_llm_report_trigger():
+    llm_route = RouteResult(
+        intents=[Intent.REPORT_TRIGGER],
+        domain=None,
+        start_date=None,
+        end_date=None,
+    )
+    with patch("myfitness.agents.intent_agent.run_intent_agent", return_value=llm_route):
+        result = classify_intent(
+            "根据前面的会话记录，给我生成饮食规划的文档",
+            use_llm=True,
+        )
+    assert result.intent == Intent.TREND_ANALYSIS
+    assert result.domain == "nutrition"
+    assert Intent.REPORT_TRIGGER not in result.intents

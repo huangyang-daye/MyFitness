@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     daily_report_output_dir: str = ""
     # 统计图（mermaid）独立文档输出目录；留空则回落到 <data_dir>/reports/charts
     chart_output_dir: str = ""
+    # Agent 生成文档输出目录；留空则回落到 <data_dir>/documents
+    document_output_dir: str = ""
     # 对话记录目录；留空则回落到 <data_dir>/chat-history
     chat_history_dir: str = ""
 
@@ -186,6 +188,8 @@ class Settings(BaseSettings):
             self.daily_report_output_dir = str(root / "reports")
         if not self.chart_output_dir.strip():
             self.chart_output_dir = str(root / "reports" / "charts")
+        if not self.document_output_dir.strip():
+            self.document_output_dir = str(root / "documents")
         if not self.chat_history_dir.strip():
             self.chat_history_dir = str(root / "chat-history")
         return self

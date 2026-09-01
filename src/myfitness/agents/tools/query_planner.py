@@ -13,7 +13,7 @@ _RECENT_DAYS_RE = re.compile(r"最?\s*近\s*(\d+)\s*天")
 _PAST_DAYS_RE = re.compile(r"(?:最?\s*近|过[去了]?|前)\s*(\d+)\s*天")
 _ISO_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 _CN_MD_RE = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日?")
-_DOT_MD_RE = re.compile(r"(?<!\d)(\d{1,2})[./](\d{1,2})(?!\d)")
+_DOT_MD_RE = re.compile(r"(?<!\d)([1-9]\d?)[./](\d{1,2})(?!\d)")
 _RANGE_CONNECTOR_RE = re.compile(r"(?:到|至|~|～|-|—|–)")
 BODY_KEYWORDS = ("体重", "体脂", "围度", "公斤", "kg")
 NUTRITION_KEYWORDS = ("蛋白", "热量", "饮食", "吃了", "吃", "餐", "kcal", "卡路里", "碳水", "脂肪", "营养")
@@ -110,12 +110,20 @@ def parse_single_date(
         return date.fromisoformat(m.group(1))
 
     if m := _CN_MD_RE.search(message):
-        return _resolve_month_day(int(m.group(1)), int(m.group(2)), today)
+        month, day = int(m.group(1)), int(m.group(2))
+        if _is_valid_month_day(month, day):
+            return _resolve_month_day(month, day, today)
 
     if m := _DOT_MD_RE.search(message):
-        return _resolve_month_day(int(m.group(1)), int(m.group(2)), today)
+        month, day = int(m.group(1)), int(m.group(2))
+        if _is_valid_month_day(month, day):
+            return _resolve_month_day(month, day, today)
 
     return default
+
+
+def _is_valid_month_day(month: int, day: int) -> bool:
+    return 1 <= month <= 12 and 1 <= day <= 31
 
 
 def parse_date_range_text(
@@ -166,14 +174,17 @@ def _iter_date_tokens(message: str, today: date) -> list[tuple[int, int, date]]:
             continue
 
     for m in _CN_MD_RE.finditer(message):
+        month, day = int(m.group(1)), int(m.group(2))
+        if not _is_valid_month_day(month, day):
+            continue
         try:
-            add(m.start(), m.end(), _resolve_month_day(int(m.group(1)), int(m.group(2)), today))
+            add(m.start(), m.end(), _resolve_month_day(month, day, today))
         except ValueError:
             continue
 
     for m in _DOT_MD_RE.finditer(message):
         month, day = int(m.group(1)), int(m.group(2))
-        if not (1 <= month <= 12 and 1 <= day <= 31):
+        if not _is_valid_month_day(month, day):
             continue
         try:
             add(m.start(), m.end(), _resolve_month_day(month, day, today))

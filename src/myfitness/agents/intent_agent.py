@@ -72,6 +72,10 @@ def build_system_prompt(today: date) -> str:
 | general | 寒暄、能力询问、与健身数据无关的闲聊 | 你好 / 你能做什么 / 谢谢 |
 | confirmation_response | 对上一个操作的确认/取消 | 确认 / 取消 / 是的，写入 |
 
+**注意：主题文档 ≠ 日报/报告**
+- 「生成饮食规划文档 / 写一份训练计划文档 / 给我导出减脂方案文档」→ trend_analysis（或 general）+ 对应 domain，**不是** report_trigger。
+- 只有「日报 / 晨报 / 综合健康报告 / 完整报告」或「生成某天的报告（未限定单一主题）」才是 report_trigger。
+
 # 判定规则（务必遵守）
 
 ## 多意图
@@ -109,6 +113,8 @@ def build_system_prompt(today: date) -> str:
    例：「近7天体重折线图」→ chart_trigger；「近7天体重变化」→ trend_analysis。
 4. 「把图插入到/加到…（已有日报/文档）」只做插入 → 只给 chart_trigger，
    **不要**同时给 report_trigger（不重新生成报告）。
+5. 「生成/写/导出 + 主题 + 文档」（如饮食规划文档、训练计划文档）→ trend_analysis + domain，
+   **不是** report_trigger；date_range 通常填 null（基于会话上下文撰写，不按某天日报处理）。
 
 ## 易混淆情况
 1. 出现「每天/每日/定时/固定」+ 任何动作 → schedule_manage，而**不是** report_trigger / sync_trigger。
@@ -174,6 +180,12 @@ def build_system_prompt(today: date) -> str:
 
 用户：近7天饮食分析报告
 输出：{{"intents": ["trend_analysis"], "domain": "nutrition", "date_range": {{"start": "{last_week_start.isoformat()}", "end": "{today.isoformat()}"}}, "reasoning": "饮食专项分析报告"}}
+
+用户：给我生成饮食规划的文档，不要输出其他内容
+输出：{{"intents": ["trend_analysis"], "domain": "nutrition", "date_range": null, "reasoning": "生成饮食规划主题文档"}}
+
+用户：根据前面的会话记录，写一份训练计划文档
+输出：{{"intents": ["trend_analysis"], "domain": "fitness", "date_range": null, "reasoning": "基于会话写训练计划文档"}}
 
 用户：记录体重 72.5kg
 输出：{{"intents": ["manual_entry"], "domain": "body", "date_range": null, "reasoning": "手动录入体重"}}

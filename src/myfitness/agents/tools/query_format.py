@@ -21,6 +21,9 @@ def format_query_results(query_results: dict[str, dict[str, Any]]) -> str:
     training = query_results.get("training")
     if training:
         sections.append(_format_training(training))
+    document = query_results.get("document")
+    if document:
+        sections.append(_format_document(document))
 
     return "\n\n".join(sections) if sections else "（查询范围内无记录）"
 
@@ -146,4 +149,18 @@ def _format_training(data: dict) -> str:
         lines.append(f"... 其余 {data['count'] - 10} 次省略")
     if data["count"] == 0:
         lines.append("- 无记录")
+    return "\n".join(lines)
+
+
+def _format_document(data: dict) -> str:
+    if data.get("error"):
+        return f"【文档读取】失败：{data['error']}"
+    preview = str(data.get("content", ""))
+    if len(preview) > 4000:
+        preview = preview[:4000] + "\n…（已截断）"
+    lines = [
+        f"【文档·{data.get('filename', data.get('title', '未命名'))}】"
+        f"格式 {data.get('format', '')}，约 {data.get('char_count', len(preview))} 字",
+        preview or "（空文档）",
+    ]
     return "\n".join(lines)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterator
 
 from myfitness.agents.tools.query_format import format_query_results
@@ -15,6 +16,25 @@ from myfitness.schemas.agent_outputs import AgentOutputs, SummaryAgentOutput
 from myfitness.schemas.state import ContextSnapshot, Intent
 
 logger = logging.getLogger(__name__)
+
+_AGENT_NAME_RE = re.compile(
+    r"(?:好的[,，]?\s*)?(?:我作为|我是)\s*(?:MyFitness\s*)?"
+    r"(?:Summary|Body|Fitness|Nutrition|Document)?\s*Agent[,，]?\s*",
+    re.IGNORECASE,
+)
+_INTERNAL_AGENT_RE = re.compile(
+    r"(?:Summary|Body|Fitness|Nutrition|Document|Specialist)\s*Agent",
+    re.IGNORECASE,
+)
+
+
+def sanitize_user_facing_reply(text: str) -> str:
+    """去掉回复中暴露的内部 Agent 名称。"""
+    cleaned = _AGENT_NAME_RE.sub("", text)
+    cleaned = _INTERNAL_AGENT_RE.sub("健康助手", cleaned)
+    cleaned = re.sub(r"多\s*Agent\s*健康助手", "健康助手", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 @trace_agent("SummaryAgent")
@@ -128,25 +148,38 @@ def build_summary_messages(
         parts.append("【数据缺口】\n" + "\n".join(f"- {g}" for g in context.data_gaps))
 
     user_content = "\n\n".join(parts)
+    system = (
+        "你是 MyFitness 健康助手。根据提供的分析要点、数据库查询明细、联网检索结果"
+        "以及用户画像/会话记忆，用简洁清晰的中文回复用户。"
+        "要求：必须优先引用数据库查询结果中的具体数字；结合长期画像保持建议连贯；"
+        "若有联网检索结果，综合网页资料回答知识性问题，关键结论后标注 [n]，"
+        "文末用「参考资料」列出标题和链接；本地用户数据优先于网页；"
+        "不做医疗诊断；不要编造未提供的数据；"
+        "禁止在回复中出现 Agent、Summary Agent、Specialist 等内部系统名称，"
+        "以第一人称「我」直接回答即可。"
+    )
+    if user_message.strip():
+        from myfitness.agents.tools.document_tools import needs_document_write
+
+        if needs_document_write(user_message):
+            system += (
+                "用户还要求将内容保存为文档文件（如 PDF/Word/Markdown）。"
+                "系统会在回复后自动写入文件，你只需在对话中给出分析/建议正文；"
+                "禁止声称无法生成、导出或保存文件，也不要指导用户去用其他工具手动保存。"
+            )
     return [
-        {
-            "role": "system",
-            "content": (
-                "你是 MyFitness 多 Agent 健康助手的 Summary Agent。"
-                "根据各 Specialist Agent 的结构化分析、数据库查询明细、联网检索结果以及用户画像/会话记忆，"
-                "用简洁清晰的中文回复用户。"
-                "要求：必须优先引用数据库查询结果中的具体数字；结合长期画像保持建议连贯；"
-                "若有联网检索结果，综合网页资料回答知识性问题，关键结论后标注 [n]，"
-                "文末用「参考资料」列出标题和链接；本地用户数据优先于网页；"
-                "不做医疗诊断；不要编造未提供的数据。"
-            ),
-        },
+        {"role": "system", "content": system},
         {"role": "user", "content": user_content},
     ]
 
 
-def should_stream_summary(intent: Intent) -> bool:
+def should_stream_summary(intent: Intent, user_message: str = "") -> bool:
     """手动录入确认、同步等固定文案不走 LLM 流式。"""
+    if user_message:
+        from myfitness.agents.tools.document_tools import wants_minimal_chat_for_document
+
+        if wants_minimal_chat_for_document(user_message):
+            return False
     return intent not in {
         Intent.MANUAL_ENTRY,
         Intent.CONFIRMATION_RESPONSE,
@@ -165,7 +198,7 @@ def iter_summary_reply(
 
     兜底链：LLM 流式 → （部分输出则原样结束）→ 规则模板。
     """
-    if is_llm_configured() and should_stream_summary(intent):
+    if is_llm_configured() and should_stream_summary(intent, user_message):
         emitted: list[str] = []
         try:
             messages = build_summary_messages(agent_outputs, context, intent, user_message)
@@ -173,6 +206,10 @@ def iter_summary_reply(
                 emitted.append(chunk)
                 yield chunk
             if emitted:
+                combined = sanitize_user_facing_reply("".join(emitted))
+                if combined != "".join(emitted):
+                    # 流式已发出原文字，仅在最终 state 落盘时由 finalize 再清洗
+                    pass
                 return
             # 空响应 → 规则兜底
             logger.warning("LLM 返回空回复，使用规则模板兜底")

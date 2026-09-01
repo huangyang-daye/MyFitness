@@ -107,7 +107,9 @@ def run_orchestrated_turn(
     execution.agents_invoked.append("summary")
     if execution.reply_parts:
         execution.reply_parts.append(execution.agent_outputs.summary.content_md)
-    return execution, bool(llm_enabled) and should_stream_summary(task_plan.primary_intent)
+    return execution, bool(llm_enabled) and should_stream_summary(
+        task_plan.primary_intent, state.user_message
+    )
 
 
 def _execute_plan(

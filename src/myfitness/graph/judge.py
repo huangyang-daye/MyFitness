@@ -60,6 +60,7 @@ def _llm_judge(
 - 若用户同时要求「录入数据」和「评价进度」，仅完成录入确认而没有任何进度评价，则 satisfied=false。
 - 若解析出的数值明显错误（如体重=2025kg），satisfied=false。
 - 若仍在等待用户确认写入（needs_confirmation=true），且用户还要求分析/评价，则 satisfied=false。
+- 若用户要求保存/导出为 PDF、Word、Markdown 等文档，文件由系统在回复后自动落盘；只需检查分析/建议内容是否充分，不要因为尚未看到文件路径而判失败。
 - 最多允许 {_MAX_RETRIES} 次重做；当前为第 {attempt} 次评估。
 
 # 用户原始消息

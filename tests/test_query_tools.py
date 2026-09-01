@@ -44,6 +44,25 @@ def test_parse_single_date_variants():
     assert parse_single_date("生成日报", today, default=date(2026, 8, 22)) == date(2026, 8, 22)
 
 
+def test_parse_single_date_ignores_decimal_ratios():
+    today = date(2026, 9, 1)
+    assert parse_single_date("0.5倍体重脂肪", today) is None
+    assert parse_single_date("2倍体重蛋白质", today) is None
+    assert parse_single_date("72.5kg", today) is None
+
+
+def test_build_query_plan_macro_ratios_not_parsed_as_dates():
+    today = date(2026, 9, 1)
+    message = (
+        "参考我的身体数据，根据3倍体重碳水，2倍体重蛋白质，0.5倍体重脂肪的原则，"
+        "规划一下每日的饮食构成，生成规划然后输出为文档"
+    )
+    plan = build_query_plan(message, Intent.TREND_ANALYSIS, domain="nutrition", today=today)
+    assert plan is not None
+    assert plan.end_date == today
+    assert "nutrition" in plan.domains
+
+
 def test_build_query_plan_recent_7_days_includes_today():
     today = date(2026, 8, 23)
     plan = build_query_plan("最近7天的体重", Intent.DATA_QUERY, today=today)

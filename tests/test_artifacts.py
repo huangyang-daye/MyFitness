@@ -64,3 +64,31 @@ def test_resolve_returns_absolute_path(settings, data_dir):
     resolved = resolve_artifact(str(data_dir / "reports" / "2026-08-29.md"))
     assert resolved.is_absolute()
     assert resolved.name == "2026-08-29.md"
+
+
+def test_pdf_artifact_preview_metadata(settings, data_dir):
+    pdf = data_dir / "documents" / "plan.pdf"
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF-1.4\n%EOF\n")
+    payload = read_artifact(str(pdf))
+    assert payload["preview_type"] == "pdf"
+    assert payload["kind"] == "document"
+    assert payload["content"] == ""
+
+
+def test_docx_artifact_preview_html(settings, data_dir):
+    pytest.importorskip("docx")
+    from myfitness.agents.document_blocks import write_docx_blocks
+
+    docx = data_dir / "documents" / "plan.docx"
+    docx.parent.mkdir(parents=True, exist_ok=True)
+    write_docx_blocks(
+        docx,
+        [
+            {"type": "title", "text": "训练计划"},
+            {"type": "paragraph", "text": "每周训练 3 次。"},
+        ],
+    )
+    payload = read_artifact(str(docx))
+    assert payload["preview_type"] == "docx_html"
+    assert "训练计划" in payload["preview_html"]
