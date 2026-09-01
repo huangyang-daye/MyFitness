@@ -17,6 +17,8 @@ const state = {
   providers: [],
   activeModelId: null,
   editingModelId: null,
+  knowledge: [],
+  editingKnowledgeId: null,
   artifacts: [],
   openArtifactPath: null,
   theme: "dark",
@@ -818,15 +820,209 @@ function openSettings(page = "home") {
 function showSettingsPage(page) {
   el("settingsHome").classList.toggle("hidden", page !== "home");
   el("settingsModels").classList.toggle("hidden", page !== "models");
+  el("settingsKnowledge").classList.toggle("hidden", page !== "knowledge");
   el("settingsAppearance").classList.toggle("hidden", page !== "appearance");
-  el("settingsTitle").textContent = page === "models" ? "模型" : page === "appearance" ? "外观" : "设置";
+  el("settingsTitle").textContent = page === "models"
+    ? "模型"
+    : page === "knowledge"
+      ? "知识库"
+      : page === "appearance"
+        ? "外观"
+        : "设置";
   el("settingsSubtitle").textContent = page === "models"
     ? "OpenAI 兼容协议 · 保存在本机数据目录"
-    : page === "appearance"
-      ? "背景主题保存在本机浏览器"
-      : "MyFitness Agent · 本地运行";
+    : page === "knowledge"
+      ? "自定义文档 · 写入 pgvector 语义检索"
+      : page === "appearance"
+        ? "背景主题保存在本机浏览器"
+        : "MyFitness Agent · 本地运行";
   if (page === "models") loadModels();
+  if (page === "knowledge") loadKnowledge();
   if (page === "appearance") applyTheme(state.theme, { persist: false });
+}
+
+/* -------------------------------------------------------------- 知识库 */
+
+function resetKnowledgeForm() {
+  state.editingKnowledgeId = null;
+  el("knowledgeFormId").value = "";
+  el("knowledgeFormTitle").textContent = "添加知识";
+  el("knowledgeFormName").value = "";
+  el("knowledgeFormContent").value = "";
+  el("knowledgeFormCancel").classList.add("hidden");
+  el("knowledgeFormDelete").classList.add("hidden");
+  resetKnowledgeFileInput();
+  document.querySelectorAll(".knowledge-card").forEach((node) => node.classList.remove("active"));
+}
+
+function resetKnowledgeFileInput() {
+  const input = el("knowledgeFileInput");
+  if (input) input.value = "";
+  const hint = el("knowledgeFileHint");
+  if (hint) hint.textContent = "支持 md / pdf / doc / docx / txt / html，解析后可再编辑保存";
+}
+
+function renderKnowledgeSummary(data) {
+  const summary = el("settingsKnowledgeSummary");
+  if (!summary) return;
+  const count = data?.entry_count ?? 0;
+  summary.textContent = count ? `${count} 条 · ${data.indexed_chunks ?? 0} 向量块` : "管理 RAG 参考文档";
+  el("knowledgeEntryCount").textContent = String(count);
+  el("knowledgeChunkCount").textContent = String(data?.indexed_chunks ?? 0);
+  const status = el("knowledgeStatus");
+  if (!data?.available) {
+    status.textContent = data?.embedding_configured
+      ? "RAG 未就绪：请确认 PostgreSQL 已安装 pgvector 并运行 myfitness rag init"
+      : "RAG 未就绪：请配置 Embedding API（DeepSeek 等聊天模型没有 /embeddings，需单独设置 EMBEDDING_BASE_URL）";
+    return;
+  }
+  status.textContent = `RAG 已就绪 · 总向量块 ${data.total_chunks ?? 0}`;
+}
+
+function renderKnowledgeList() {
+  const container = el("knowledgeList");
+  if (!state.knowledge.length) {
+    container.innerHTML = '<div class="knowledge-empty">还没有知识条目。可在下方添加训练原则、饮食偏好等参考内容。</div>';
+    return;
+  }
+  container.innerHTML = state.knowledge.map((entry) => `
+    <article class="knowledge-card ${Number(state.editingKnowledgeId) === Number(entry.id) ? "active" : ""}" data-knowledge-id="${entry.id}">
+      <strong>${escapeHtml(entry.title)}${entry.kind === "memory" ? '<span class="knowledge-kind">长期记忆</span>' : ""}</strong>
+      <p>${escapeHtml(entry.preview || "")}</p>
+      <small>更新于 ${escapeHtml(formatLocalTime(entry.updated_at))}</small>
+    </article>
+  `).join("");
+  container.querySelectorAll("[data-knowledge-id]").forEach((node) => {
+    node.addEventListener("click", () => editKnowledge(Number(node.dataset.knowledgeId)));
+  });
+}
+
+async function loadKnowledgeSummary() {
+  try {
+    const data = await api("/api/knowledge");
+    renderKnowledgeSummary(data);
+  } catch {
+    /* 设置首页摘要失败时静默忽略 */
+  }
+}
+
+async function loadKnowledge() {
+  el("knowledgeList").innerHTML = '<div class="knowledge-empty">正在加载知识库…</div>';
+  try {
+    const data = await api("/api/knowledge");
+    state.knowledge = data.entries || [];
+    renderKnowledgeSummary(data);
+    renderKnowledgeList();
+  } catch (error) {
+    el("knowledgeList").innerHTML = `<div class="knowledge-empty">${escapeHtml(error.message)}</div>`;
+    showToast(error.message);
+  }
+}
+
+function editKnowledge(entryId) {
+  const entry = state.knowledge.find((item) => Number(item.id) === Number(entryId));
+  if (!entry) return;
+  state.editingKnowledgeId = entry.id;
+  el("knowledgeFormId").value = String(entry.id);
+  el("knowledgeFormTitle").textContent = "编辑知识";
+  el("knowledgeFormName").value = entry.title;
+  el("knowledgeFormContent").value = entry.content;
+  el("knowledgeFormCancel").classList.remove("hidden");
+  el("knowledgeFormDelete").classList.remove("hidden");
+  resetKnowledgeFileInput();
+  renderKnowledgeList();
+}
+
+async function parseKnowledgeFile(event) {
+  const input = event.target;
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const hint = el("knowledgeFileHint");
+  hint.textContent = `正在解析 ${file.name}…`;
+  const form = new FormData();
+  form.append("file", file, file.name);
+  try {
+    const response = await fetch("/api/knowledge/parse", { method: "POST", body: form });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `解析失败 (${response.status})`);
+    const titleInput = el("knowledgeFormName");
+    if (!state.editingKnowledgeId || !titleInput.value.trim()) {
+      titleInput.value = data.title || "";
+    }
+    el("knowledgeFormContent").value = data.content || "";
+    const extra = data.truncated ? "（已截断到长度上限）" : "";
+    hint.textContent = `已解析 ${data.filename} · ${data.format.toUpperCase()} · ${data.char_count} 字${extra}，请核对后保存`;
+    showToast(data.truncated ? "文件已解析并截断，请核对后保存" : "文件已解析，请核对后保存");
+  } catch (error) {
+    hint.textContent = "解析失败，请改用 md / pdf / docx / txt，或直接粘贴文本";
+    showToast(error.message);
+  } finally {
+    input.value = "";
+  }
+}
+
+async function submitKnowledgeForm(event) {
+  event.preventDefault();
+  const payload = {
+    title: el("knowledgeFormName").value.trim(),
+    content: el("knowledgeFormContent").value.trim(),
+  };
+  const saveButton = el("knowledgeFormSave");
+  saveButton.disabled = true;
+  try {
+    if (state.editingKnowledgeId) {
+      await api(`/api/knowledge/${state.editingKnowledgeId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      showToast("知识条目已更新并重新索引");
+    } else {
+      await api("/api/knowledge", { method: "POST", body: JSON.stringify(payload) });
+      showToast("已添加到知识库");
+    }
+    resetKnowledgeForm();
+    await loadKnowledge();
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    saveButton.disabled = false;
+  }
+}
+
+async function deleteKnowledgeEntry() {
+  if (!state.editingKnowledgeId) return;
+  if (!window.confirm("确定删除这条知识？相关向量块也会一并移除。")) return;
+  try {
+    await api(`/api/knowledge/${state.editingKnowledgeId}`, { method: "DELETE" });
+    showToast("已删除");
+    resetKnowledgeForm();
+    await loadKnowledge();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function reindexKnowledge(full = false) {
+  try {
+    const data = await api("/api/knowledge/reindex", {
+      method: "POST",
+      body: JSON.stringify({ full }),
+    });
+    showToast(full ? "全部 RAG 索引重建完成" : "知识库索引重建完成");
+    await loadKnowledge();
+    return data;
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function formatLocalTime(value) {
+  if (!value) return "—";
+  try {
+    return new Date(value).toLocaleString("zh-CN", { hour12: false });
+  } catch {
+    return value;
+  }
 }
 
 /* -------------------------------------------------------------- 定时任务 */
@@ -1213,6 +1409,13 @@ function bindEvents() {
   el("modelFormDelete").addEventListener("click", () => deleteModel(state.editingModelId));
   el("modelSelect").addEventListener("change", (event) => activateModel(event.target.value));
 
+  el("knowledgeForm").addEventListener("submit", submitKnowledgeForm);
+  el("knowledgeFormCancel").addEventListener("click", resetKnowledgeForm);
+  el("knowledgeFormDelete").addEventListener("click", deleteKnowledgeEntry);
+  el("knowledgeFileInput").addEventListener("change", parseKnowledgeFile);
+  el("knowledgeReindex").addEventListener("click", () => reindexKnowledge(false));
+  el("knowledgeReindexAll").addEventListener("click", () => reindexKnowledge(true));
+
   document.querySelectorAll("[data-prompt]").forEach((button) => button.addEventListener("click", () => { input.value = button.dataset.prompt; resizeInput(); input.focus(); }));
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); newSession(); }
@@ -1235,7 +1438,7 @@ async function init() {
   try {
     await api("/api/health");
     el("connectionStatus").textContent = "已连接 · JSON 持久化";
-    await Promise.all([refreshSessions(), loadTasks(false), loadModels()]);
+    await Promise.all([refreshSessions(), loadTasks(false), loadModels(), loadKnowledgeSummary()]);
     showDraftConversation();
     input.focus();
   } catch (error) {

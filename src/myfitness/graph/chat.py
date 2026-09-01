@@ -42,9 +42,12 @@ from myfitness.agents.tools.schedule_tools import (
 )
 from myfitness.agents.tools.write_tools import apply_body_manual_write, apply_nutrition_manual_write
 from myfitness.config import get_settings
+from myfitness.graph.orchestrator import resume_pending_plan, run_orchestrated_turn
+from myfitness.graph.planner import should_use_orchestrator
 from myfitness.graph.progress import ProgressCallback, emit, label_for
 from myfitness.graph.router import RouteResult, agents_for_intent, classify_intent
 from myfitness.llm.factory import is_llm_configured
+from myfitness.memory.manager import apply_memory_for_turn, attach_memory
 from myfitness.schemas.agent_outputs import AgentOutputs
 from myfitness.schemas.state import (
     Artifact,
@@ -118,22 +121,21 @@ def prepare_chat_turn(
         return ChatTurnResult(state=state, stream=False)
 
     emit(on_progress, f"{label_for('classify_intent')}…")
+    use_llm = is_llm_configured()
     route = classify_intent(
         state.user_message,
         state.pending_confirmation,
-        use_llm=is_llm_configured(),
+        use_llm=use_llm,
     )
     state.intent = route.intent
     state.intent_domain = route.domain
 
+    emit(on_progress, f"{label_for('memory')}…")
+    memory_bundle = apply_memory_for_turn(session, state, intent=route.intent)
+
     if route.has(Intent.CONFIRMATION_RESPONSE) and state.pending_confirmation:
         emit(on_progress, f"{label_for('confirmation')}…")
-        _handle_confirmation(session, state, route.confirmation_action or "cancel")
-        return ChatTurnResult(state=state, stream=False)
-
-    if route.has(Intent.MANUAL_ENTRY):
-        emit(on_progress, f"{label_for('manual_entry')}…")
-        _handle_manual_entry(session, state, route.domain or "nutrition")
+        _handle_confirmation(session, state, route.confirmation_action or "cancel", on_progress)
         return ChatTurnResult(state=state, stream=False)
 
     has_chart = route.has(Intent.CHART_TRIGGER)
@@ -176,6 +178,34 @@ def prepare_chat_turn(
         _handle_chart(session, state, route)
         return ChatTurnResult(state=state, stream=False)
 
+    if should_use_orchestrator(route, state.user_message, use_llm=use_llm):
+        execution, use_stream = run_orchestrated_turn(
+            session,
+            state,
+            route,
+            memory_bundle,
+            on_progress=on_progress,
+            use_llm=use_llm,
+        )
+        if execution.needs_confirmation:
+            _append_assistant(state)
+            return ChatTurnResult(state=state, stream=False)
+        state.agent_outputs = execution.agent_outputs
+        state.context = execution.context
+        state.metadata.tools_invoked = execution.tools_invoked
+        state.metadata.agents_invoked = execution.agents_invoked
+        state.errors.extend(execution.errors)
+        summary = execution.agent_outputs.summary
+        state.reply = summary.content_md if summary else execution.summary_text()
+        if not use_stream:
+            _append_assistant(state)
+        return ChatTurnResult(state=state, stream=use_stream)
+
+    if route.has(Intent.MANUAL_ENTRY):
+        emit(on_progress, f"{label_for('manual_entry')}…")
+        _handle_manual_entry(session, state, route.domain or "nutrition")
+        return ChatTurnResult(state=state, stream=False)
+
     plan = build_query_plan(state.user_message, route.intent, route.domain)
     state.context, tools_invoked = load_context_for_turn(
         session,
@@ -185,7 +215,13 @@ def prepare_chat_turn(
         route.domain,
         on_progress=on_progress,
         plan=plan,
+        start_date=route.start_date,
+        end_date=route.end_date,
     )
+    if memory_bundle.short_term or memory_bundle.long_term:
+        state.context = attach_memory(state.context, memory_bundle)
+        if memory_bundle.updated or memory_bundle.compressed:
+            tools_invoked.append("memory")
     state.metadata.tools_invoked = tools_invoked
     invoked: list[str] = []
 
@@ -203,7 +239,7 @@ def prepare_chat_turn(
             state.agent_outputs.fitness = run_fitness_agent(state.context)
             invoked.append("fitness_planner")
 
-    if not invoked and route.intent != Intent.GENERAL:
+    if not invoked and route.intent not in {Intent.GENERAL, Intent.WEB_SEARCH}:
         invoked.append("summary")
 
     invoked.append("summary")
@@ -211,7 +247,7 @@ def prepare_chat_turn(
     emit(on_progress, f"{label_for('summary')}…")
 
     use_stream = (
-        is_llm_configured()
+        use_llm
         and should_stream_summary(route.intent)
     )
     return ChatTurnResult(state=state, stream=use_stream)
@@ -284,9 +320,8 @@ def _agents_for_turn(route: RouteResult, plan: QueryPlan | None) -> list[str]:
 
 
 def _handle_manual_entry(session: Session, state: MyFitnessGraphState, domain: str) -> None:
-    target = state.target_date or date.today()
     if domain == "body":
-        payload = parse_body_entry(state.user_message, target)
+        payload = parse_body_entry(state.user_message, state.target_date)
         if not payload:
             state.reply = "未能解析体重/体脂，请例如：记录体重 72.5kg"
             _append_assistant(state)
@@ -301,7 +336,7 @@ def _handle_manual_entry(session: Session, state: MyFitnessGraphState, domain: s
         )
         state.reply = summary
     else:
-        payload = parse_nutrition_entry(state.user_message, target)
+        payload = parse_nutrition_entry(state.user_message, state.target_date)
         if not payload:
             state.reply = "未能解析饮食，请例如：午餐 鸡胸肉 200g 苹果 1个"
             _append_assistant(state)
@@ -323,6 +358,7 @@ def _handle_confirmation(
     session: Session,
     state: MyFitnessGraphState,
     action: str,
+    on_progress: ProgressCallback | None = None,
 ) -> None:
     pending = state.pending_confirmation
     if not pending:
@@ -361,6 +397,23 @@ def _handle_confirmation(
 
     state.pending_confirmation = None
     if pending.action_type.startswith("schedule_"):
+        _append_assistant(state)
+        return
+
+    if state.pending_plan:
+        from myfitness.memory.types import MemoryBundle
+
+        execution, _use_stream = resume_pending_plan(
+            session,
+            state,
+            MemoryBundle(),
+            on_progress=on_progress,
+        )
+        summary = execution.agent_outputs.summary
+        if summary and summary.content_md:
+            state.reply = f"{state.reply}\n\n{summary.content_md}".strip()
+        state.agent_outputs = execution.agent_outputs
+        state.context = execution.context
         _append_assistant(state)
         return
 
@@ -747,9 +800,11 @@ def _append_to_reply(state: MyFitnessGraphState, extra: str) -> None:
     state.reply = f"{state.reply}\n\n{extra}" if state.reply else extra
     if state.messages and state.messages[-1].role == "assistant":
         state.messages[-1].content = state.reply
-        # 追加内容时可能又产生了新产物（例如先出报表再插图），同步到已落地的消息
-        state.messages[-1].artifacts = list(state.pending_artifacts)
-        state.pending_artifacts = []
+        # 追加内容时可能又产生了新产物（例如先出报表再插图），合并到已落地的消息
+        if state.pending_artifacts:
+            existing = list(state.messages[-1].artifacts)
+            state.messages[-1].artifacts = existing + list(state.pending_artifacts)
+            state.pending_artifacts = []
     else:
         _append_assistant(state)
 

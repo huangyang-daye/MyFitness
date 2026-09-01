@@ -8,6 +8,8 @@ from datetime import UTC, date, datetime
 from myfitness.agents.summary import build_rule_based_summary
 from myfitness.agents.tools.query_format import format_query_results
 from myfitness.llm.factory import chat_completion, is_llm_configured
+from myfitness.rag.format import format_retrieved_chunks
+from myfitness.rag.schemas import RetrievedChunk
 from myfitness.schemas.agent_outputs import AgentOutputs
 from myfitness.schemas.state import ContextSnapshot, Intent
 
@@ -61,6 +63,8 @@ def build_report_messages(
             "【数据库查询明细 — 必须基于以下真实数据撰写，禁止编造】\n"
             + format_query_results(context.query_results)
         )
+    if context and context.retrieved_chunks:
+        parts.append(_format_report_retrieval(context))
     if context and context.data_gaps:
         parts.append("【数据缺口】\n" + "\n".join(f"- {g}" for g in context.data_gaps))
 
@@ -175,3 +179,29 @@ def wrap_report_document(
         charts_block = f"\n\n---\n\n## 数据趋势图\n\n{charts_md.strip()}\n"
 
     return f"{header}{body_md.strip()}{charts_block}\n"
+
+
+def _format_report_retrieval(context: ContextSnapshot) -> str:
+    from datetime import date as date_cls
+
+    chunks: list[RetrievedChunk] = []
+    for item in context.retrieved_chunks:
+        record_date = item.get("record_date")
+        parsed_date = date_cls.fromisoformat(record_date) if isinstance(record_date, str) else None
+        chunks.append(
+            RetrievedChunk(
+                id=int(item.get("id", 0)),
+                source_type=str(item.get("source_type", "")),
+                source_id=str(item.get("source_id", "")),
+                domain=str(item.get("domain", "")),
+                title=str(item.get("title", "")),
+                content=str(item.get("content", "")),
+                record_date=parsed_date,
+                similarity=float(item.get("similarity", 0.0)),
+                metadata=item.get("metadata"),
+            )
+        )
+    return (
+        "【语义检索结果 — 可参考以下历史片段，与数据库明细冲突时以数据库为准】\n"
+        + format_retrieved_chunks(chunks)
+    )

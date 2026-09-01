@@ -63,6 +63,7 @@ chart_app = typer.Typer(help="Mermaid 统计图")
 scheduler_app = typer.Typer(help="定时任务调度")
 session_app = typer.Typer(help="历史对话管理")
 artifact_app = typer.Typer(help="报表与图表产物查看")
+rag_app = typer.Typer(help="RAG 语义检索（pgvector）")
 app.add_typer(db_app, name="db")
 app.add_typer(llm_app, name="llm")
 app.add_typer(xunji_app, name="xunji")
@@ -71,6 +72,7 @@ app.add_typer(chart_app, name="chart")
 app.add_typer(scheduler_app, name="scheduler")
 app.add_typer(session_app, name="session")
 app.add_typer(artifact_app, name="artifact")
+app.add_typer(rag_app, name="rag")
 
 console = Console()
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
@@ -123,6 +125,95 @@ def _parse_date_option(value: str | None) -> date | None:
     if value is None:
         return None
     return date.fromisoformat(value)
+
+
+@rag_app.command("init")
+def rag_init() -> None:
+    """初始化 pgvector 扩展与 RAG 表/索引。"""
+    from myfitness.db.session import get_engine
+    from myfitness.rag.pgvector_setup import ensure_rag_schema, is_postgresql
+
+    engine = get_engine()
+    if not is_postgresql(engine):
+        console.print("[red]RAG 需要 PostgreSQL 数据库（当前非 PostgreSQL）[/red]")
+        raise typer.Exit(1)
+    try:
+        ensure_rag_schema(engine)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print("[green]RAG 表与 pgvector 扩展已就绪[/green]")
+
+
+@rag_app.command("index")
+def rag_index(
+    full: bool = typer.Option(False, "--full", help="全量重建索引（忽略日期范围）"),
+    user_id: int = typer.Option(1, "--user-id", help="用户 ID"),
+    start: str | None = typer.Option(None, "--start", help="起始日期 YYYY-MM-DD"),
+    end: str | None = typer.Option(None, "--end", help="结束日期 YYYY-MM-DD"),
+) -> None:
+    """将身体/饮食/训练/报告数据索引到 pgvector。"""
+    from myfitness.rag.indexer import index_user_data
+
+    start_date = _parse_date_option(start)
+    end_date = _parse_date_option(end)
+    with session_scope() as session:
+        get_or_create_default_user(session, user_id)
+        result = index_user_data(
+            session,
+            user_id,
+            start_date=start_date,
+            end_date=end_date,
+            full=full,
+        )
+    table = Table(title="RAG 索引结果")
+    table.add_column("字段")
+    table.add_column("值")
+    for key, value in result.items():
+        table.add_row(str(key), str(value))
+    console.print(table)
+    if result.get("status") == "skipped":
+        raise typer.Exit(1)
+
+
+@rag_app.command("search")
+def rag_search(
+    query: str = typer.Argument(..., help="检索语句"),
+    user_id: int = typer.Option(1, "--user-id", help="用户 ID"),
+    top_k: int = typer.Option(5, "--top-k", help="返回条数"),
+) -> None:
+    """语义检索 RAG 向量库。"""
+    from myfitness.rag.format import format_retrieved_chunks
+    from myfitness.rag.store import search_chunks
+
+    with session_scope() as session:
+        get_or_create_default_user(session, user_id)
+        chunks = search_chunks(session, user_id, query, top_k=top_k)
+    if not chunks:
+        console.print("[yellow]未找到匹配片段（请先 myfitness rag index）[/yellow]")
+        raise typer.Exit(1)
+    console.print(Markdown(format_retrieved_chunks(chunks)))
+
+
+@rag_app.command("stats")
+def rag_stats(user_id: int = typer.Option(1, "--user-id", help="用户 ID")) -> None:
+    """查看 RAG 索引统计。"""
+    from myfitness.rag.pgvector_setup import rag_is_available
+    from myfitness.rag.store import chunk_stats, count_chunks
+
+    with session_scope() as session:
+        get_or_create_default_user(session, user_id)
+        available = rag_is_available(session)
+        total = count_chunks(session, user_id)
+        stats = chunk_stats(session, user_id)
+    table = Table(title="RAG 统计")
+    table.add_column("字段")
+    table.add_column("值")
+    table.add_row("可用", "是" if available else "否")
+    table.add_row("总块数", str(total))
+    for source_type, count in sorted(stats.items()):
+        table.add_row(source_type, str(count))
+    console.print(table)
 
 
 @app.command("sync")

@@ -62,6 +62,7 @@ def build_system_prompt(today: date) -> str:
 | sync_trigger | 从训记 App 同步/拉取/更新数据到本地 | 同步今日数据 / 拉取训记 / 更新最近7天数据 |
 | report_trigger | 生成**完整**日报/晨报/综合健康报告（未限定单一主题） | 生成昨天的日报 / 出一份8月24日的报告 / 生成8月20日到8月25日的报告 |
 | chart_trigger | 画统计图（折线图、柱状图等），可生成文档或插入现有文档 | 生成最近7天体重折线图 / 把近30天体脂画成图插入昨天的日报 |
+| web_search | 联网检索公开资料（指南、研究、推荐摄入、训练方法等），不是查用户自己的记录 | 搜一下HIIT一周练几次 / 蛋白质推荐摄入量有什么科学依据 |
 | schedule_manage | 创建/查看/修改/取消**定时/每天/每日**重复任务 | 每天早上7点生成日报 / 查看定时任务 / 取消每天同步 |
 | data_query | 查询某天/某段时间**已记录**的数据 | 昨天吃了多少蛋白质 / 查询今天体重 / 8月21日练了什么 |
 | trend_analysis | 分析/报告某一主题的**变化/趋势/对比**（含领域专项报告） | 近30天体脂变化 / 体重变化报告 / 对比近7天摄入和消耗 / 近7天饮食分析报告 |
@@ -116,7 +117,11 @@ def build_system_prompt(today: date) -> str:
 3. data_query 与 trend_analysis 的区别：问「某天/某段是多少/有没有」是 data_query；问「变化/趋势/对比/XX报告（有主题）」是 trend_analysis。
 4. 带数量描述的食物语句（吃了鸡胸肉200g、鸡蛋2个）→ manual_entry，不是 data_query。
 5. 「目标/降到/增到/减到 + 数值单位」→ goal_setting。
-6. 与健身数据无关的问候/闲聊/帮助请求 → general。
+6. 同一句含「记录初始体重/体脂」+「评价/进度/怎么样」→ 必须返回 manual_entry、goal_setting（若有目标）、trend_analysis 多个意图；不要把年份当成体重数值。
+7. 与健身数据无关的问候/闲聊/帮助请求 → general。
+8. 「搜一下/联网/网上查/查资料」或询问公开知识（什么是、如何练、推荐摄入、科学依据、指南、最新研究）→ web_search，**不是** data_query。
+   问用户自己某天吃了/练了/体重是多少仍是 data_query。
+   若同时要对照自己的数据和公开推荐（如「我昨天蛋白质对照推荐量够不够」），intents 可含 data_query 与 web_search。
 
 ## 域推断（domain）
 - body：体重、体脂、围度等身体指标
@@ -173,8 +178,17 @@ def build_system_prompt(today: date) -> str:
 用户：记录体重 72.5kg
 输出：{{"intents": ["manual_entry"], "domain": "body", "date_range": null, "reasoning": "手动录入体重"}}
 
+用户：以2025年9月1日为起点，记录初始体重130kg、体脂37%，目标减到85kg，评价减肥进度
+输出：{{"intents": ["manual_entry", "goal_setting", "trend_analysis"], "domain": "body", "date_range": {{"start": "2025-09-01", "end": "{today.isoformat()}"}}, "reasoning": "录入基准、设目标、评进度"}}
+
 用户：每天早上7点生成日报
 输出：{{"intents": ["schedule_manage"], "domain": null, "date_range": null, "reasoning": "定时重复任务"}}
+
+用户：搜一下HIIT一周练几次比较好
+输出：{{"intents": ["web_search"], "domain": "fitness", "date_range": null, "reasoning": "联网检索训练知识"}}
+
+用户：蛋白质推荐摄入量有什么科学依据
+输出：{{"intents": ["web_search"], "domain": "nutrition", "date_range": null, "reasoning": "检索公开营养资料"}}
 
 用户：你好
 输出：{{"intents": ["general"], "domain": null, "date_range": null, "reasoning": "寒暄"}}

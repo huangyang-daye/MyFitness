@@ -20,6 +20,8 @@ TOOL_LABELS: dict[str, str] = {
     "query_training_logs": "查询训练记录",
     "load_context": "加载上下文",
     "classify_intent": "识别意图",
+    "planner": "Planner 拆分任务",
+    "judge": "Judge 质量评估",
     "body_monitor": "BodyMonitor 分析中",
     "nutritionist": "Nutritionist 分析中",
     "fitness_planner": "FitnessPlanner 分析中",
@@ -31,6 +33,8 @@ TOOL_LABELS: dict[str, str] = {
     "daily_report": "生成日报",
     "period_report": "生成周期报表",
     "chart": "生成统计图",
+    "memory": "整理记忆",
+    "web_search": "联网检索",
 }
 
 

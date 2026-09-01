@@ -111,10 +111,18 @@ def run_sync(
     )
 
     logger.info("Sync %s for %s ~ %s: %s", status, start, end, results)
-    return {
+    result = {
         "status": status,
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "results": results,
         "errors": errors,
     }
+    if status in {"success", "partial"}:
+        try:
+            from myfitness.rag.pipeline import maybe_index_after_sync
+
+            maybe_index_after_sync(session, user_id, start, end)
+        except Exception as exc:  # noqa: BLE001 - indexing must not break sync
+            logger.warning("RAG 增量索引失败: %s", exc)
+    return result

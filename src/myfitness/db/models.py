@@ -17,6 +17,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from myfitness.db.types import SqliteEmbeddingFallback
+
 # SQLite 测试环境需用 Integer 才能正确 autoincrement
 BigIntPK = BigInteger().with_variant(Integer, "sqlite")
 
@@ -245,3 +247,52 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
+
+
+class KnowledgeEntry(Base):
+    """用户自定义知识库条目 — 索引到 RAG 向量库。"""
+
+    __tablename__ = "knowledge_entries"
+    __table_args__ = (
+        Index("idx_knowledge_user_updated", "user_id", "updated_at"),
+        Index("idx_knowledge_user_kind", "user_id", "kind"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigIntPK, ForeignKey("users.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="user", server_default="user"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class RagChunk(Base):
+    """RAG 向量块 — 存储于 PostgreSQL pgvector。"""
+
+    __tablename__ = "rag_chunks"
+    __table_args__ = (
+        UniqueConstraint("user_id", "source_type", "source_id", name="uk_rag_chunk_source"),
+        Index("idx_rag_chunk_user_date", "user_id", "record_date"),
+        Index("idx_rag_chunk_user_domain", "user_id", "domain"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigIntPK, ForeignKey("users.id"), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    domain: Mapped[str] = mapped_column(String(32), nullable=False)
+    record_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    title: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    chunk_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(SqliteEmbeddingFallback, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )

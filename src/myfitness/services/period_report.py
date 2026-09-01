@@ -197,6 +197,38 @@ def render_period_report(
     if query_results:
         context.query_results = query_results
 
+    from myfitness.rag.pipeline import retrieve_for_turn
+    from myfitness.schemas.state import Intent
+
+    retrieved = retrieve_for_turn(
+        session,
+        user_id,
+        user_message or f"生成 {start_date.isoformat()} ~ {end_date.isoformat()} 健康报告",
+        Intent.REPORT_TRIGGER,
+        domain=domain,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    if retrieved:
+        context = context.model_copy(
+            update={
+                "retrieved_chunks": [
+                    {
+                        "id": item.id,
+                        "source_type": item.source_type,
+                        "source_id": item.source_id,
+                        "domain": item.domain,
+                        "title": item.title,
+                        "content": item.content,
+                        "record_date": item.record_date.isoformat() if item.record_date else None,
+                        "similarity": item.similarity,
+                        "metadata": item.metadata,
+                    }
+                    for item in retrieved
+                ]
+            }
+        )
+
     report_agents = _agents_for_report(domain)
     outputs = AgentOutputs()
     if "body" in report_agents:
@@ -264,6 +296,13 @@ def render_period_report(
     file_path = write_report_file(
         content_md, start_date, end_date, settings.daily_report_output_dir
     )
+
+    try:
+        from myfitness.rag.pipeline import maybe_index_after_report
+
+        maybe_index_after_report(session, user_id, end_date)
+    except Exception as exc:  # noqa: BLE001 - indexing must not break report
+        logger.warning("RAG 报告索引失败: %s", exc)
 
     return {
         "report_date": end_date.isoformat(),

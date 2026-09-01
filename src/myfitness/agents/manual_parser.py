@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from datetime import date
 
+from myfitness.agents.tools.query_planner import parse_single_date
+
 MEAL_KEYWORDS = {
     "breakfast": ["早餐", "早饭", "早上"],
     "lunch": ["午餐", "午饭", "中午"],
@@ -12,13 +14,47 @@ MEAL_KEYWORDS = {
     "snack": ["零食", "加餐"],
 }
 
+_WEIGHT_RE = re.compile(
+    r"(?:初始?\s*)?(?:体重|weight)\s*(?:为|是|:|：)?\s*(\d+(?:\.\d+)?)\s*(?:kg|公斤|千克)?",
+    re.I,
+)
+_BODYFAT_RE = re.compile(
+    r"(?:初始?\s*)?(?:体脂(?:率)?|bodyfat)\s*(?:为|是|:|：)?\s*(\d+(?:\.\d+)?)\s*%?",
+    re.I,
+)
+_WEIGHT_FALLBACK_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:kg|公斤|千克)",
+    re.I,
+)
+_GOAL_WEIGHT_RE = re.compile(
+    r"(?:目标|减到|降到|增到|达到)\s*(?:体重)?\s*(\d+(?:\.\d+)?)\s*(?:kg|公斤|千克)?",
+    re.I,
+)
+
+
+_YEAR_CN_DATE_RE = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+
+
+def _extract_record_date(message: str) -> date | None:
+    match = _YEAR_CN_DATE_RE.search(message)
+    if match:
+        try:
+            return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        except ValueError:
+            pass
+    try:
+        return parse_single_date(message)
+    except ValueError:
+        return None
+
 
 def parse_body_entry(message: str, target_date: date | None = None) -> dict | None:
-    record_date = target_date or date.today()
-    weight_match = re.search(r"(?:体重|weight)?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:kg|公斤)?", message, re.I)
-    bodyfat_match = re.search(r"(?:体脂|bodyfat)?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*%?", message, re.I)
+    record_date = target_date or _extract_record_date(message) or date.today()
 
     records: list[dict] = []
+    weight_match = _WEIGHT_RE.search(message)
+    bodyfat_match = _BODYFAT_RE.search(message)
+
     if weight_match:
         records.append(
             {
@@ -28,7 +64,7 @@ def parse_body_entry(message: str, target_date: date | None = None) -> dict | No
                 "unit": "kg",
             }
         )
-    if bodyfat_match and "体脂" in message:
+    if bodyfat_match:
         records.append(
             {
                 "record_date": record_date.isoformat(),
@@ -37,21 +73,31 @@ def parse_body_entry(message: str, target_date: date | None = None) -> dict | No
                 "unit": "%",
             }
         )
-    if not records and re.search(r"(\d+(?:\.\d+)?)\s*(?:kg|公斤)", message):
-        val = float(re.search(r"(\d+(?:\.\d+)?)", message).group(1))
-        records.append(
-            {
-                "record_date": record_date.isoformat(),
-                "metric_type": "weight",
-                "value": val,
-                "unit": "kg",
-            }
-        )
+
+    if not records:
+        fallback = _WEIGHT_FALLBACK_RE.search(message)
+        if fallback:
+            records.append(
+                {
+                    "record_date": record_date.isoformat(),
+                    "metric_type": "weight",
+                    "value": float(fallback.group(1)),
+                    "unit": "kg",
+                }
+            )
+
     return {"records": records} if records else None
 
 
+def parse_goal_weight(message: str) -> float | None:
+    match = _GOAL_WEIGHT_RE.search(message)
+    if not match:
+        return None
+    return float(match.group(1))
+
+
 def parse_nutrition_entry(message: str, target_date: date | None = None) -> dict | None:
-    record_date = target_date or date.today()
+    record_date = target_date or _extract_record_date(message) or date.today()
     meal_type = _detect_meal_type(message)
     items: list[dict] = []
 

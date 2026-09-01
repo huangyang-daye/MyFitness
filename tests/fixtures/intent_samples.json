@@ -8,5 +8,7 @@
   {"text": "同步最近7天训记数据", "intent": "sync_trigger"},
   {"text": "你好", "intent": "general"},
   {"text": "查询今天热量", "intent": "data_query"},
-  {"text": "添加早餐 鸡蛋 2个", "intent": "manual_entry"}
+  {"text": "添加早餐 鸡蛋 2个", "intent": "manual_entry"},
+  {"text": "搜一下HIIT一周练几次比较好", "intent": "web_search"},
+  {"text": "蛋白质推荐摄入量有什么科学依据", "intent": "web_search"}
 ]

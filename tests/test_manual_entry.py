@@ -30,6 +30,15 @@ def test_parse_body_entry():
     assert payload["records"][0]["value"] == 72.5
 
 
+def test_parse_body_entry_with_date_prefix():
+    payload = parse_body_entry("以2025年9月1日为起点，记录我的初始体重为130kg，初始体脂率为37%")
+    assert payload
+    records = {item["metric_type"]: item for item in payload["records"]}
+    assert records["weight"]["value"] == 130.0
+    assert records["bodyfat"]["value"] == 37.0
+    assert records["weight"]["record_date"] == "2025-09-01"
+
+
 def test_parse_nutrition_entry():
     payload = parse_nutrition_entry("午餐 鸡胸肉 200g 苹果 1个")
     assert payload

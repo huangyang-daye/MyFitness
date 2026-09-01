@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from myfitness.agents.tools.chart_tools import INSERT_DOC_KEYWORDS, is_chart_request
+from myfitness.agents.tools.web_search import is_web_search_request
 from myfitness.debug import log_intent_result
 from myfitness.schemas.state import Intent, PendingConfirmation, RouteResult
 
@@ -93,6 +94,12 @@ def _reconcile(llm: RouteResult, keyword: RouteResult | None) -> RouteResult:
         if llm.intent == Intent.GENERAL and keyword.intent != Intent.GENERAL:
             return keyword
         if (
+            keyword.has(Intent.WEB_SEARCH)
+            and llm.intent == Intent.DATA_QUERY
+            and llm.start_date is None
+        ):
+            return keyword
+        if (
             llm.has(Intent.REPORT_TRIGGER)
             and keyword.has(Intent.TREND_ANALYSIS)
             and keyword.domain
@@ -129,13 +136,19 @@ def _is_confirmation_response(text: str) -> bool:
 
 
 def _is_report_request(text: str) -> bool:
-    """一次性完整日报请求（排除定时/每天/每日/自动及领域专项报告）。"""
+    """一次性完整日报请求（排除定时/每天/每日/自动、领域专项报告、纯插入图表）。"""
     if any(k in text for k in _SCHEDULE_WORDS):
         return False
     if _is_focused_topic_report(text):
         return False
-    return any(k in text for k in ("日报", "晨报")) or bool(
-        re.search(r"生成.*(?:日报|报告|晨报)", text)
+    if (
+        is_chart_request(text)
+        and any(k in text for k in INSERT_DOC_KEYWORDS)
+        and "生成" not in text
+    ):
+        return False
+    return any(k in text for k in ("日报", "晨报", "报表")) or bool(
+        re.search(r"生成.*(?:日报|报告|晨报|报表)", text)
     )
 
 
@@ -176,8 +189,13 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
     ):
         return RouteResult(intents=[Intent.SCHEDULE_MANAGE])
 
-    # 「把体重折线图插入到8月24日的日报」只是插入图表，不该触发生成新日报
-    insert_only = is_chart_request(text) and any(k in text for k in INSERT_DOC_KEYWORDS)
+    # 「把体重折线图插入到8月24日的日报」只是插入图表，不该触发生成新日报；
+    # 但「生成日报并插入趋势图」需要同时触发 report + chart。
+    insert_only = (
+        is_chart_request(text)
+        and any(k in text for k in INSERT_DOC_KEYWORDS)
+        and not _is_report_request(text)
+    )
 
     # 领域专项报告 / 趋势分析（优先于完整日报）
     if _is_focused_topic_report(text):
@@ -208,8 +226,21 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
         )
 
     # 单一意图规则
-    if re.search(r"(记录|录入|添加).*(体重|体脂)", text):
-        return RouteResult(Intent.MANUAL_ENTRY, domain="body")
+    if re.search(r"(记录|录入|添加|初始).*(体重|体脂)", text) or (
+        re.search(r"(记录|录入|初始)", text) and re.search(r"(体重|体脂)", text)
+    ):
+        intents: list[Intent] = [Intent.MANUAL_ENTRY]
+        start, end = _parse_action_date_range(text, today)
+        if re.search(r"(目标|减到|降到|增到).*(kg|公斤|千克|%)", text, re.I):
+            intents.append(Intent.GOAL_SETTING)
+        if re.search(r"(评价|进度|怎么样|分析|趋势|变化)", text):
+            intents.append(Intent.TREND_ANALYSIS)
+        return RouteResult(
+            intents=intents,
+            domain="body",
+            start_date=start,
+            end_date=end or today,
+        )
     if re.search(r"(记录|录入|添加).*(食物|餐|吃|早餐|午餐|晚餐|零食)", text):
         return RouteResult(Intent.MANUAL_ENTRY, domain="nutrition")
     if re.search(r"(吃了|午餐|晚餐|早餐|零食)", text) and re.search(r"\d+\s*(g|克|个)", text):
@@ -228,6 +259,10 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
             start_date=start,
             end_date=end,
         )
+
+    # 联网检索须在 data_query / trend 兜底之前，避免「搜一下今天HIIT怎么练」被「今天」吞掉
+    if is_web_search_request(text):
+        return RouteResult(Intent.WEB_SEARCH, domain=_infer_domain_from_text(text))
 
     if re.search(r"(最?\s*近\s*\d+\s*天|近\s*\d+\s*天|趋势|变化|对比)", text):
         start, end = _parse_action_date_range(text, today)
@@ -360,6 +395,7 @@ def agents_for_intent(intent: Intent, domain: str | None = None) -> list[str]:
         Intent.SCHEDULE_MANAGE: [],
         Intent.REPORT_TRIGGER: [],
         Intent.CHART_TRIGGER: [],
+        Intent.WEB_SEARCH: [],
         Intent.GENERAL: [],
         Intent.CONFIRMATION_RESPONSE: [],
     }

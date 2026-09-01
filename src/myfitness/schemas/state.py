@@ -26,6 +26,7 @@ class Intent(StrEnum):
     SCHEDULE_MANAGE = "schedule_manage"
     REPORT_TRIGGER = "report_trigger"
     CHART_TRIGGER = "chart_trigger"
+    WEB_SEARCH = "web_search"
     GENERAL = "general"
     CONFIRMATION_RESPONSE = "confirmation_response"
 
@@ -116,6 +117,11 @@ class ContextSnapshot(BaseModel):
     active_plans: list[dict[str, Any]] = Field(default_factory=list)
     data_gaps: list[str] = Field(default_factory=list)
     query_results: dict[str, Any] = Field(default_factory=dict)
+    retrieved_chunks: list[dict[str, Any]] = Field(default_factory=list)
+    web_search_results: list[dict[str, Any]] = Field(default_factory=list)
+    memory_short_term: str = ""
+    memory_long_term: str = ""
+    user_profile: dict[str, Any] = Field(default_factory=dict)
 
 
 class PendingConfirmation(BaseModel):
@@ -146,11 +152,15 @@ class MyFitnessGraphState(BaseModel):
     context: ContextSnapshot | None = None
     agent_outputs: AgentOutputs = Field(default_factory=AgentOutputs)
     pending_confirmation: PendingConfirmation | None = None
+    pending_plan: dict[str, Any] | None = None
     errors: list[str] = Field(default_factory=list)
     metadata: GraphMetadata = Field(default_factory=GraphMetadata)
     reply: str = ""
     # 本轮产生的产物缓冲区：_append_assistant 挂到消息上后清空
     pending_artifacts: list[Artifact] = Field(default_factory=list)
+    # 短期记忆：已压缩的较早对话摘要（完整 messages 仍保留给 UI）
+    session_memory: str = ""
+    memory_compacted_count: int = 0
 
     model_config = {"extra": "ignore"}
 

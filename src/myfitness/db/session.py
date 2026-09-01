@@ -55,7 +55,16 @@ def get_or_create_default_user(session: Session, user_id: int = 1) -> User:
 
 def init_db() -> None:
     """Create tables directly (dev helper). Prefer Alembic migrate in production."""
-    Base.metadata.create_all(get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    try:
+        from myfitness.rag.pgvector_setup import ensure_rag_schema
+
+        ensure_rag_schema(engine)
+    except Exception as exc:  # noqa: BLE001 - RAG schema optional on non-PG
+        import logging
+
+        logging.getLogger(__name__).warning("RAG schema 初始化跳过: %s", exc)
 
 
 def ensure_default_user(user_id: int = 1) -> User:

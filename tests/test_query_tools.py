@@ -70,6 +70,19 @@ def test_build_query_plan_trend_analysis_includes_today():
     assert plan.end_date == today
 
 
+def test_build_query_plan_progress_until_today_not_single_day():
+    today = date(2026, 9, 1)
+    plan = build_query_plan(
+        "评价一下我减肥到今天的进度怎么样",
+        Intent.TREND_ANALYSIS,
+        today=today,
+    )
+    assert plan is not None
+    assert plan.start_date == date(2026, 8, 3)
+    assert plan.end_date == today
+    assert plan.lookback_days == 30
+
+
 def test_query_nutrition_logs(db_session):
     db_session.add(
         NutritionLog(
@@ -110,6 +123,47 @@ def test_query_body_metrics(db_session):
     )
     assert result["count"] == 1
     assert result["records"][0]["value"] == 72.5
+
+
+def test_widen_progress_plan_to_earliest_body_metric(db_session):
+    today = date(2026, 9, 1)
+    db_session.add(
+        BodyMetric(
+            user_id=1,
+            record_date=date(2025, 9, 1),
+            metric_type="weight",
+            value=130,
+            unit="kg",
+            source=SOURCE_MANUAL,
+        )
+    )
+    db_session.add(
+        BodyMetric(
+            user_id=1,
+            record_date=today,
+            metric_type="weight",
+            value=120,
+            unit="kg",
+            source=SOURCE_MANUAL,
+        )
+    )
+    db_session.flush()
+
+    from myfitness.services.context_with_query import load_context_for_turn
+
+    context, tools = load_context_for_turn(
+        db_session,
+        1,
+        "评价一下我减肥到今天的进度怎么样",
+        Intent.TREND_ANALYSIS,
+        domain="body",
+        end_date=today,
+    )
+    assert "query_body_metrics" in tools
+    body = context.query_results["body"]
+    assert body["count"] == 2
+    assert body["start_date"] == "2025-09-01"
+    assert body["end_date"] == "2026-09-01"
 
 
 def test_prepare_chat_turn_invokes_query_tools(db_session):

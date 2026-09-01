@@ -9,7 +9,7 @@
 ### 1. 环境准备
 
 - Python 3.11+
-- PostgreSQL 14+
+- PostgreSQL 14+（RAG 需要在**同一实例**上启用 `vector` 扩展，不要另开 pgvector 容器占用 5432）
 
 ### 2. 安装
 
@@ -41,6 +41,7 @@ DATABASE_URL=postgresql+psycopg://postgres:你的密码@localhost:5432/myfitness
 ```powershell
 # 方式一（推荐，需已 Activate venv）
 myfitness db migrate
+myfitness rag init   # 在现有库启用 pgvector 并建 RAG 表；找不到 vector 扩展时见 docker/postgres/Dockerfile
 
 # 方式二（不激活 venv 也可）
 .\.venv\Scripts\myfitness.exe db migrate
@@ -61,6 +62,8 @@ myfitness sync --days 7
 | 命令 | 说明 |
 |------|------|
 | `myfitness db migrate` | 执行 Alembic 数据库迁移 |
+| `myfitness rag init` | 在现有 PostgreSQL 启用 pgvector 并创建 RAG 表 |
+| `myfitness rag index --full` | 将身体/饮食/训练/报告数据索引到 pgvector |
 | `myfitness sync --days 7` | 同步最近 7 天训记数据 |
 | `myfitness sync --start 2026-08-01 --end 2026-08-21` | 同步指定日期范围 |
 | `myfitness report generate --date 2026-08-24` | 生成单日日报 |
@@ -179,6 +182,17 @@ LLM_TIMEOUT=120
 ```
 
 支持 DeepSeek、Ollama 代理等任意 OpenAI 兼容服务，只需修改 `LLM_BASE_URL` 与 `LLM_MODEL`。
+
+DeepSeek / Claude 等**只有聊天接口、没有 `/embeddings`**。用这类模型时，语义检索需要单独配置：
+
+```env
+EMBEDDING_BASE_URL=https://api.openai.com/v1
+EMBEDDING_API_KEY=your-embedding-key
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSIONS=1536
+```
+
+未配置 embedding 时对话仍可用，只是会跳过 RAG 语义检索。
 
 Web 设置页和 CLI 共用 `<DATA_DIR>/llm-models.json` 中的模型预设；API Key 在列表和配置输出中始终脱敏：
 

@@ -194,6 +194,16 @@
               </span>
               <span class="settings-entry-arrow">›</span>
             </button>
+            <button class="settings-entry" data-settings-page="knowledge">
+              <span class="settings-entry-icon">
+                <svg viewBox="0 0 24 24"><path d="M6 3.5h8l4 4V20H6zM14 3.5V8h4" /><path d="M8 12h8M8 16h5" /></svg>
+              </span>
+              <span class="settings-entry-copy">
+                <strong>知识库</strong>
+                <small id="settingsKnowledgeSummary">管理 RAG 参考文档</small>
+              </span>
+              <span class="settings-entry-arrow">›</span>
+            </button>
             <button class="settings-entry" data-settings-page="appearance">
               <span class="settings-entry-icon">
                 <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 0 0 16z" /></svg>
@@ -254,6 +264,55 @@
                 <button type="button" class="ghost-button hidden" id="modelFormCancel">取消</button>
                 <button type="button" class="ghost-button danger hidden" id="modelFormDelete">删除</button>
                 <button type="submit" class="primary-button" id="modelFormSave">保存模型</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="settings-page hidden" id="settingsKnowledge">
+            <button class="settings-back" type="button">← 返回设置</button>
+            <h3>知识库</h3>
+            <p class="settings-hint">
+              添加训练原则、饮食偏好、伤病注意事项等参考文档，也可上传 Markdown、PDF、Word（doc/docx）、TXT、HTML。
+              对话中提到的目标、忌口、伤病等会自动写入「长期记忆」画像并参与检索。
+              保存后会自动写入 pgvector，对话与报告生成时会作为语义检索上下文。
+            </p>
+
+            <div class="knowledge-stats" id="knowledgeStats">
+              <div class="knowledge-stat"><strong id="knowledgeEntryCount">0</strong><span>条目</span></div>
+              <div class="knowledge-stat"><strong id="knowledgeChunkCount">0</strong><span>向量块</span></div>
+              <div class="knowledge-stat wide"><span id="knowledgeStatus">正在读取…</span></div>
+            </div>
+
+            <div class="knowledge-toolbar">
+              <button type="button" class="ghost-button" id="knowledgeReindex">重建知识库索引</button>
+              <button type="button" class="ghost-button" id="knowledgeReindexAll">重建全部 RAG 索引</button>
+            </div>
+
+            <div class="knowledge-list" id="knowledgeList"></div>
+
+            <form class="knowledge-form" id="knowledgeForm">
+              <input type="hidden" id="knowledgeFormId" value="" />
+              <h4 id="knowledgeFormTitle">添加知识</h4>
+              <label class="model-field full">
+                <span>标题</span>
+                <input id="knowledgeFormName" maxlength="200" required placeholder="例如：减脂期饮食原则" />
+              </label>
+              <label class="model-field full">
+                <span>内容</span>
+                <textarea id="knowledgeFormContent" rows="8" required placeholder="支持 Markdown，可写多条原则、注意事项、个人偏好… 也可先上传文件自动填充。"></textarea>
+              </label>
+              <div class="knowledge-upload">
+                <label class="knowledge-file-button">
+                  <input type="file" id="knowledgeFileInput" accept=".md,.markdown,.txt,.pdf,.doc,.docx,.html,.htm,.rtf,text/markdown,text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html" />
+                  选择文件解析
+                </label>
+                <span class="knowledge-file-hint" id="knowledgeFileHint">支持 md / pdf / doc / docx / txt / html，解析后可再编辑保存</span>
+              </div>
+              <div class="model-form-actions">
+                <button type="button" class="ghost-button hidden" id="knowledgeFormCancel">取消编辑</button>
+                <span class="model-form-spacer"></span>
+                <button type="button" class="ghost-button danger hidden" id="knowledgeFormDelete">删除</button>
+                <button type="submit" class="primary-button" id="knowledgeFormSave">保存到知识库</button>
               </div>
             </form>
           </section>

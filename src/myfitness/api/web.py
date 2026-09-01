@@ -31,15 +31,67 @@ from myfitness.graph.chat import (
 from myfitness.llm.factory import LlmConfig, probe_llm_config
 from myfitness.llm.registry import ModelRegistryError, get_registry
 from myfitness.paths import PROJECT_ROOT
+from myfitness.rag.document_parser import MAX_FILE_BYTES, DocumentParseError, parse_document
+from myfitness.rag.knowledge_service import KnowledgeError, KnowledgeNotFound
 from myfitness.services.artifacts import ArtifactError, read_artifact
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parents[1] / "web_static"
 PROBE_TIMEOUT = 30
+MAX_JSON_BYTES = 100_000
+MAX_UPLOAD_BYTES = MAX_FILE_BYTES + 64_000
 TASK_TYPES = {
     ScheduledTaskRepository.TASK_DAILY_REPORT: "生成健康日报",
     ScheduledTaskRepository.TASK_SYNC: "同步训记数据",
 }
+
+
+def parse_multipart_file(body: bytes, content_type: str) -> tuple[str, bytes]:
+    """从 multipart/form-data 取出名为 file 的上传内容。"""
+    match = re.search(r"boundary=([^;]+)", content_type or "", re.IGNORECASE)
+    if not match:
+        raise ValueError("请使用 multipart/form-data 上传文件")
+    boundary = match.group(1).strip().strip('"')
+    delim = b"--" + boundary.encode("ascii", "replace")
+    parts = body.split(delim)
+    for raw_part in parts:
+        part = raw_part.lstrip(b"\r\n")
+        if not part or part.startswith(b"--"):
+            continue
+        header_blob, separator, payload = part.partition(b"\r\n\r\n")
+        if not separator:
+            header_blob, separator, payload = part.partition(b"\n\n")
+        if not separator:
+            continue
+        headers = header_blob.decode("utf-8", "replace")
+        disposition = ""
+        for line in headers.splitlines():
+            if line.lower().startswith("content-disposition:"):
+                disposition = line
+                break
+        if not disposition:
+            continue
+        filename = _multipart_filename(disposition)
+        name_match = re.search(r'\bname="?([^";]+)"?', disposition, re.IGNORECASE)
+        field_name = name_match.group(1).strip() if name_match else ""
+        if payload.endswith(b"\r\n"):
+            payload = payload[:-2]
+        elif payload.endswith(b"\n"):
+            payload = payload[:-1]
+        if field_name == "file" or filename:
+            return filename or "untitled", payload
+    raise ValueError("未找到上传文件，请使用字段名 file")
+
+
+def _multipart_filename(disposition: str) -> str:
+    star = re.search(r"filename\*=(?:UTF-8''|utf-8'')([^;]+)", disposition, re.IGNORECASE)
+    if star:
+        return Path(unquote(star.group(1).strip().strip('"'))).name
+    normal = re.search(r'filename="([^"]*)"|filename=([^;]+)', disposition, re.IGNORECASE)
+    if not normal:
+        return ""
+    raw = (normal.group(1) or normal.group(2) or "").strip().strip('"')
+    return Path(unquote(raw)).name
 
 
 class ScheduledTaskNotFound(ValueError):
@@ -294,6 +346,72 @@ class AgentWebApplication:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, **result}
 
+    # ------------------------------------------------------------------- 知识库
+    def list_knowledge(self) -> dict[str, Any]:
+        from myfitness.rag.knowledge_service import list_knowledge
+
+        settings = get_settings()
+        with session_scope() as session:
+            get_or_create_default_user(session, settings.default_user_id)
+            return list_knowledge(session, settings.default_user_id)
+
+    def create_knowledge(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from myfitness.rag.knowledge_service import create_knowledge
+
+        settings = get_settings()
+        with session_scope() as session:
+            get_or_create_default_user(session, settings.default_user_id)
+            return create_knowledge(
+                session,
+                settings.default_user_id,
+                title=str(payload.get("title") or ""),
+                content=str(payload.get("content") or ""),
+            )
+
+    def parse_knowledge_file(self, filename: str, data: bytes) -> dict[str, Any]:
+        parsed = parse_document(filename, data)
+        return {
+            "title": parsed.title,
+            "content": parsed.content,
+            "filename": parsed.filename,
+            "format": parsed.format,
+            "truncated": parsed.truncated,
+            "char_count": parsed.char_count,
+        }
+
+    def update_knowledge(self, entry_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        from myfitness.rag.knowledge_service import update_knowledge
+
+        settings = get_settings()
+        with session_scope() as session:
+            get_or_create_default_user(session, settings.default_user_id)
+            changes: dict[str, str] = {}
+            if "title" in payload:
+                changes["title"] = str(payload.get("title") or "")
+            if "content" in payload:
+                changes["content"] = str(payload.get("content") or "")
+            if not changes:
+                raise ValueError("没有可提交的修改")
+            return update_knowledge(session, settings.default_user_id, entry_id, **changes)
+
+    def delete_knowledge(self, entry_id: int) -> dict[str, Any]:
+        from myfitness.rag.knowledge_service import delete_knowledge
+
+        settings = get_settings()
+        with session_scope() as session:
+            get_or_create_default_user(session, settings.default_user_id)
+            return delete_knowledge(session, settings.default_user_id, entry_id)
+
+    def reindex_knowledge(self, *, full: bool = False) -> dict[str, Any]:
+        from myfitness.rag.knowledge_service import reindex_all_data, reindex_all_knowledge
+
+        settings = get_settings()
+        with session_scope() as session:
+            get_or_create_default_user(session, settings.default_user_id)
+            if full:
+                return reindex_all_data(session, settings.default_user_id)
+            return reindex_all_knowledge(session, settings.default_user_id)
+
     def _lock_for(self, session_id: str) -> threading.Lock:
         canonical = self.history.normalize_session_id(session_id)
         with self._locks_guard:
@@ -346,6 +464,9 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/models":
                 self._json(self.server.app.list_models())
                 return
+            if parsed.path == "/api/knowledge":
+                self._json(self.server.app.list_knowledge())
+                return
             if parsed.path == "/api/artifact":
                 query = parse_qs(parsed.query)
                 self._json(
@@ -359,6 +480,14 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if parsed.path.startswith("/api/knowledge/"):
+                raw_id = parsed.path.removeprefix("/api/knowledge/").strip("/")
+                if not raw_id.isdigit():
+                    raise ValueError("知识条目 id 无效")
+                self._json(
+                    self.server.app.update_knowledge(int(raw_id), self._read_json())
+                )
+                return
             if parsed.path.startswith("/api/scheduled-tasks/"):
                 raw_id = parsed.path.removeprefix("/api/scheduled-tasks/").strip("/")
                 if not raw_id.isdigit():
@@ -389,6 +518,22 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
                 body = self._read_json()
                 self._json(self.server.app.send_message(session_id, body.get("message", "")))
                 return
+            if parsed.path == "/api/knowledge/reindex":
+                body = self._read_json()
+                self._json(
+                    self.server.app.reindex_knowledge(full=bool(body.get("full")))
+                )
+                return
+            if parsed.path == "/api/knowledge/parse":
+                filename, file_bytes = self._read_multipart_file()
+                self._json(self.server.app.parse_knowledge_file(filename, file_bytes))
+                return
+            if parsed.path == "/api/knowledge":
+                self._json(
+                    self.server.app.create_knowledge(self._read_json()),
+                    status=HTTPStatus.CREATED,
+                )
+                return
             if parsed.path == "/api/models":
                 self._json(self.server.app.save_model(self._read_json()))
                 return
@@ -408,6 +553,12 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if parsed.path.startswith("/api/knowledge/"):
+                raw_id = parsed.path.removeprefix("/api/knowledge/").strip("/")
+                if not raw_id.isdigit():
+                    raise ValueError("知识条目 id 无效")
+                self._json(self.server.app.delete_knowledge(int(raw_id)))
+                return
             if parsed.path.startswith("/api/models/"):
                 model_id = unquote(parsed.path.removeprefix("/api/models/")).strip("/")
                 if not model_id:
@@ -419,13 +570,7 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
             self._handle_error(exc)
 
     def _read_json(self) -> dict[str, Any]:
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError as exc:
-            raise ValueError("Content-Length 无效") from exc
-        if length > 100_000:
-            raise ValueError("请求内容过大")
-        raw = self.rfile.read(length)
+        raw = self._read_body(MAX_JSON_BYTES)
         try:
             value = json.loads(raw or b"{}")
         except json.JSONDecodeError as exc:
@@ -433,6 +578,29 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(value, dict):
             raise ValueError("JSON 根节点必须是 object")  # noqa: TRY004
         return value
+
+    def _read_body(self, max_bytes: int) -> bytes:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("Content-Length 无效") from exc
+        if length < 0:
+            raise ValueError("Content-Length 无效")
+        if length > max_bytes:
+            raise ValueError("请求内容过大")
+        return self.rfile.read(length) if length else b""
+
+    def _read_multipart_file(self) -> tuple[str, bytes]:
+        content_type = self.headers.get("Content-Type", "")
+        filename, payload = parse_multipart_file(
+            self._read_body(MAX_UPLOAD_BYTES),
+            content_type,
+        )
+        if not payload:
+            raise ValueError("文件为空")
+        if len(payload) > MAX_FILE_BYTES:
+            raise ValueError(f"文件不能超过 {MAX_FILE_BYTES // (1024 * 1024)}MB")
+        return filename, payload
 
     def _serve_static(self, request_path: str) -> None:
         name = "index.html" if request_path in {"", "/"} else request_path.lstrip("/")
@@ -504,9 +672,12 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _handle_error(self, exc: Exception) -> None:
-        if isinstance(exc, (ChatSessionNotFound, ScheduledTaskNotFound)):
+        if isinstance(exc, (ChatSessionNotFound, ScheduledTaskNotFound, KnowledgeNotFound)):
             self._json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
-        elif isinstance(exc, (ChatHistoryError, ArtifactError, ValueError)):
+        elif isinstance(
+            exc,
+            (ChatHistoryError, ArtifactError, ValueError, KnowledgeError, DocumentParseError),
+        ):
             self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
         else:
             logger.exception("Agent UI request failed")

@@ -23,10 +23,19 @@ def db_session():
 
 
 def _run_turn(db_session, message, *, report=None, chart=None):
+    from myfitness.agents.tools.base import invoke_tool as real_invoke_tool
+
     state = new_chat_state(user_id=1)
+
+    def invoke_tool_side_effect(tool, session, user_id, /, **kwargs):
+        tool_name = getattr(tool, "name", "") or str(tool)
+        if chart is not None and "generate_chart" in tool_name:
+            return chart
+        return real_invoke_tool(tool, session, user_id, **kwargs)
+
     with patch("myfitness.graph.chat.is_llm_configured", return_value=False):
         with patch("myfitness.graph.chat._generate_report", return_value=report) as report_mock, \
-             patch("myfitness.graph.chat.generate_chart", return_value=chart) as chart_mock:
+             patch("myfitness.graph.chat.invoke_tool", side_effect=invoke_tool_side_effect) as chart_mock:
             state = run_chat_turn(db_session, state, message)
     return state, report_mock, chart_mock
 

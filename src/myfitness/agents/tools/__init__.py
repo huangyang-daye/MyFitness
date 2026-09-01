@@ -44,6 +44,14 @@ from myfitness.agents.tools.schedule_tools import (
     apply_schedule_upsert,
     list_scheduled_tasks,
 )
+from myfitness.agents.tools.web_search import (
+    build_search_query,
+    format_web_search_results,
+    is_web_search_request,
+    needs_web_search,
+    search_web,
+    web_search,
+)
 from myfitness.agents.tools.write_tools import apply_body_manual_write, apply_nutrition_manual_write
 
 # 可直接绑定到 LLM 的规范工具集合（入参 / 返回值均可序列化）。
@@ -59,6 +67,7 @@ ALL_TOOLS = [
     list_scheduled_tasks,
     generate_chart,
     insert_chart_into_document,
+    web_search,
 ]
 
 # 供测试 / 调试：按名称索引。
@@ -98,4 +107,10 @@ __all__ = [
     "render_chart_document",
     "tool_config",
     "write_chart_document",
+    "web_search",
+    "search_web",
+    "needs_web_search",
+    "is_web_search_request",
+    "build_search_query",
+    "format_web_search_results",
 ]

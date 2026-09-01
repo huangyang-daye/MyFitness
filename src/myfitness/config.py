@@ -70,6 +70,110 @@ class Settings(BaseSettings):
     sync_default_days: int = 90
     xunji_cache_ttl_seconds: int = 300
 
+    # RAG — pgvector 语义检索
+    rag_enabled: bool = True
+    rag_top_k: int = 5
+    rag_min_similarity: float = 0.35
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 1536
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    rag_index_batch_size: int = 32
+
+    # 记忆系统 — 短期窗口 + 长期画像 + 上下文压缩
+    memory_enabled: bool = True
+    memory_short_term_turns: int = 8
+    memory_compress_chars: int = 1200
+    memory_profile_max_items: int = 8
+
+    # 联网检索 — 对话中检索中国互联网公开资料（博查 / 智谱 / HTML 回退）
+    web_search_enabled: bool = True
+    web_search_provider: str = "auto"  # auto | bocha | zhipu | duckduckgo | bing
+    web_search_api_key: str = ""
+    bocha_api_key: str = ""
+    zhipu_api_key: str = ""
+    web_search_count: int = 8
+    web_search_timeout: int = 15
+    web_search_freshness: str = "noLimit"
+
+    @field_validator("rag_top_k")
+    @classmethod
+    def validate_rag_top_k(cls, value: int) -> int:
+        if value < 1 or value > 50:
+            raise ValueError("RAG_TOP_K 须在 1 ~ 50 之间")
+        return value
+
+    @field_validator("rag_min_similarity")
+    @classmethod
+    def validate_rag_min_similarity(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("RAG_MIN_SIMILARITY 须在 0.0 ~ 1.0 之间")
+        return value
+
+    @field_validator("embedding_dimensions")
+    @classmethod
+    def validate_embedding_dimensions(cls, value: int) -> int:
+        if value < 64 or value > 4096:
+            raise ValueError("EMBEDDING_DIMENSIONS 须在 64 ~ 4096 之间")
+        return value
+
+    @field_validator("memory_short_term_turns")
+    @classmethod
+    def validate_memory_short_term_turns(cls, value: int) -> int:
+        if value < 2 or value > 40:
+            raise ValueError("MEMORY_SHORT_TERM_TURNS 须在 2 ~ 40 之间")
+        return value
+
+    @field_validator("memory_compress_chars")
+    @classmethod
+    def validate_memory_compress_chars(cls, value: int) -> int:
+        if value < 200 or value > 8000:
+            raise ValueError("MEMORY_COMPRESS_CHARS 须在 200 ~ 8000 之间")
+        return value
+
+    @field_validator("memory_profile_max_items")
+    @classmethod
+    def validate_memory_profile_max_items(cls, value: int) -> int:
+        if value < 2 or value > 20:
+            raise ValueError("MEMORY_PROFILE_MAX_ITEMS 须在 2 ~ 20 之间")
+        return value
+
+    @field_validator("web_search_provider")
+    @classmethod
+    def validate_web_search_provider(cls, value: str) -> str:
+        allowed = {"auto", "bocha", "zhipu", "duckduckgo", "bing"}
+        normalized = (value or "auto").strip().lower()
+        if normalized not in allowed:
+            raise ValueError("WEB_SEARCH_PROVIDER 须为 auto / bocha / zhipu / duckduckgo / bing")
+        return normalized
+
+    @field_validator("web_search_count")
+    @classmethod
+    def validate_web_search_count(cls, value: int) -> int:
+        if value < 1 or value > 20:
+            raise ValueError("WEB_SEARCH_COUNT 须在 1 ~ 20 之间")
+        return value
+
+    @field_validator("web_search_timeout")
+    @classmethod
+    def validate_web_search_timeout(cls, value: int) -> int:
+        if value < 3 or value > 60:
+            raise ValueError("WEB_SEARCH_TIMEOUT 须在 3 ~ 60 之间")
+        return value
+
+    def resolved_bocha_api_key(self) -> str:
+        return (self.bocha_api_key or self.web_search_api_key).strip()
+
+    def resolved_zhipu_search_key(self) -> str:
+        return (self.zhipu_api_key or self.web_search_api_key).strip()
+
+    def resolved_embedding_api_key(self) -> str:
+        return self.embedding_api_key or self.resolved_llm_api_key()
+
+    def resolved_embedding_base_url(self) -> str:
+        base = (self.embedding_base_url or self.llm_base_url).strip().rstrip("/")
+        return base
+
     @model_validator(mode="after")
     def derive_data_paths(self) -> "Settings":
         """把留空的派生路径回填为 data_dir 之下的子目录。

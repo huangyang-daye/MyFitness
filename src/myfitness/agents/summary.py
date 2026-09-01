@@ -6,8 +6,11 @@ import logging
 from collections.abc import Iterator
 
 from myfitness.agents.tools.query_format import format_query_results
+from myfitness.agents.tools.web_search import format_web_search_results
 from myfitness.debug import trace_agent
 from myfitness.llm.factory import is_llm_configured, stream_chat_completion
+from myfitness.rag.format import format_retrieved_chunks
+from myfitness.rag.schemas import RetrievedChunk
 from myfitness.schemas.agent_outputs import AgentOutputs, SummaryAgentOutput
 from myfitness.schemas.state import ContextSnapshot, Intent
 
@@ -60,6 +63,23 @@ def build_rule_based_summary(
     if include_query_results and context and context.query_results:
         sections.append(f"**数据库查询结果**\n{format_query_results(context.query_results)}")
 
+    rag_section = _format_context_retrieval(context)
+    if rag_section:
+        sections.append(rag_section)
+
+    web_section = _format_web_search(context)
+    if web_section:
+        sections.append(web_section)
+
+    memory_section = _format_memory(context)
+    if memory_section:
+        sections.append(memory_section)
+
+    if intent == Intent.GENERAL:
+        greeting = "你好！我是 MyFitness 健康助手，可以帮你查询数据、记录饮食/体重、分析趋势。"
+        if not any("MyFitness" in section for section in sections):
+            sections.insert(0, greeting)
+
     if not sections:
         if intent == Intent.GENERAL:
             sections.append(
@@ -95,6 +115,15 @@ def build_summary_messages(
             "【数据库查询明细 — 必须基于以下真实数据回答，禁止编造】\n"
             + format_query_results(context.query_results)
         )
+    rag_section = _format_context_retrieval(context)
+    if rag_section:
+        parts.append(rag_section)
+    web_section = _format_web_search(context)
+    if web_section:
+        parts.append(web_section)
+    memory_section = _format_memory(context)
+    if memory_section:
+        parts.append(memory_section)
     if context and context.data_gaps:
         parts.append("【数据缺口】\n" + "\n".join(f"- {g}" for g in context.data_gaps))
 
@@ -104,8 +133,12 @@ def build_summary_messages(
             "role": "system",
             "content": (
                 "你是 MyFitness 多 Agent 健康助手的 Summary Agent。"
-                "根据各 Specialist Agent 的结构化分析及数据库查询明细，用简洁清晰的中文回复用户。"
-                "要求：必须优先引用数据库查询结果中的具体数字；不做医疗诊断；不要编造未提供的数据。"
+                "根据各 Specialist Agent 的结构化分析、数据库查询明细、联网检索结果以及用户画像/会话记忆，"
+                "用简洁清晰的中文回复用户。"
+                "要求：必须优先引用数据库查询结果中的具体数字；结合长期画像保持建议连贯；"
+                "若有联网检索结果，综合网页资料回答知识性问题，关键结论后标注 [n]，"
+                "文末用「参考资料」列出标题和链接；本地用户数据优先于网页；"
+                "不做医疗诊断；不要编造未提供的数据。"
             ),
         },
         {"role": "user", "content": user_content},
@@ -153,3 +186,52 @@ def iter_summary_reply(
             return
 
     yield build_rule_based_summary(agent_outputs, context, intent)
+
+
+def _format_context_retrieval(context: ContextSnapshot | None) -> str:
+    if not context or not context.retrieved_chunks:
+        return ""
+    from datetime import date as date_cls
+
+    chunks: list[RetrievedChunk] = []
+    for item in context.retrieved_chunks:
+        record_date = item.get("record_date")
+        parsed_date = date_cls.fromisoformat(record_date) if isinstance(record_date, str) else None
+        chunks.append(
+            RetrievedChunk(
+                id=int(item.get("id", 0)),
+                source_type=str(item.get("source_type", "")),
+                source_id=str(item.get("source_id", "")),
+                domain=str(item.get("domain", "")),
+                title=str(item.get("title", "")),
+                content=str(item.get("content", "")),
+                record_date=parsed_date,
+                similarity=float(item.get("similarity", 0.0)),
+                metadata=item.get("metadata"),
+            )
+        )
+    return (
+        "【语义检索结果 — 优先引用以下历史片段，注明来源日期/类型；"
+        "与数据库明细冲突时以数据库为准】\n"
+        + format_retrieved_chunks(chunks)
+    )
+
+
+def _format_web_search(context: ContextSnapshot | None) -> str:
+    if not context or not context.web_search_results:
+        return ""
+    return format_web_search_results(context.web_search_results)
+
+
+def _format_memory(context: ContextSnapshot | None) -> str:
+    if not context:
+        return ""
+    parts: list[str] = []
+    if context.memory_long_term.strip():
+        parts.append(
+            "【用户画像 / 长期记忆 — 回答时保持一致，不要编造画像中没有的事实】\n"
+            + context.memory_long_term.strip()
+        )
+    if context.memory_short_term.strip():
+        parts.append("【本轮会话记忆】\n" + context.memory_short_term.strip())
+    return "\n\n".join(parts)

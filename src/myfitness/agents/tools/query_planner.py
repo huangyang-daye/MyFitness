@@ -46,24 +46,36 @@ def needs_database_query(intent: Intent, message: str) -> bool:
     return False
 
 
+_PROGRESS_END_RE = re.compile(r"(到今天|至今|到目前为止|到目前为止)")
+_PROGRESS_HINT_RE = re.compile(r"(进度|趋势|变化|对比|减肥|减脂|增肌|成效|效果)")
+
+
 def build_query_plan(
     message: str,
     intent: Intent,
     domain: str | None = None,
     today: date | None = None,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> QueryPlan | None:
     if not needs_database_query(intent, message):
         return None
 
     today = today or date.today()
-    start, end = _parse_date_range(message, today, intent)
+    parsed_start, parsed_end = _parse_date_range(message, today, intent)
+    plan_start = start_date or parsed_start
+    plan_end = end_date or parsed_end
+    if plan_start > plan_end:
+        plan_start, plan_end = plan_end, plan_start
+
     domains = _infer_domains(message, intent, domain)
     metric_type = _infer_metric_type(message)
     meal_type = _infer_meal_type(message)
 
     return QueryPlan(
-        start_date=start,
-        end_date=end,
+        start_date=plan_start,
+        end_date=plan_end,
         domains=domains,
         metric_type=metric_type,
         meal_type=meal_type,
@@ -189,9 +201,24 @@ def _parse_date_range(message: str, today: date, intent: Intent) -> tuple[date, 
         # 含今天：近 7 天 = today-6 … today
         return today - timedelta(days=days - 1), today
 
+    # 「…到今天 / 至今 + 进度/趋势」表示区间终点是今天，不是只查今天
+    if intent == Intent.TREND_ANALYSIS and (
+        _PROGRESS_END_RE.search(message) or _PROGRESS_HINT_RE.search(message)
+    ):
+        if "今天" in message or "今日" in message:
+            explicit = parse_date_range_text(message, today)
+            if explicit[0] is not None:
+                return explicit[0], explicit[1] or today
+            return today - timedelta(days=29), today
+
     single = parse_single_date(message, today)
-    if single is not None:
+    if single is not None and intent != Intent.TREND_ANALYSIS:
         return single, single
+
+    if single is not None and intent == Intent.TREND_ANALYSIS:
+        # 趋势类里单独的「今天/8月24日」仍可能是单日快照查询
+        if not (_PROGRESS_END_RE.search(message) or _PROGRESS_HINT_RE.search(message)):
+            return single, single
 
     if intent == Intent.TREND_ANALYSIS:
         return today - timedelta(days=29), today
