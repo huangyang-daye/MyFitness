@@ -244,7 +244,7 @@ Agent 功能需额外安装：`pip install -e ".[agents]"`，代码中通过 `my
 
 ## 训记集成
 
-训记 Open API 严格按项目内 Skill 实现，文档位于 `skills/xunji-*/SKILL.md`：
+训记 Open API 严格按项目内 Skill 实现，训记用户可在训记app上自行申请skill api，并把skill放到 `skills/xunji-*/SKILL.md`：
 
 | Skill | 模块 | 解析/写确认 |
 |-------|------|-------------|

@@ -121,7 +121,7 @@ def _build_planner_prompt(today: date) -> str:
 4. 无依赖关系的任务 depends_on 留空数组，Orchestrator 将并行执行。
 5. 数字必须绑定到正确字段：年份不是体重，「130kg」才是体重，「37%」才是体脂。
 6. 若用户要求个性化饮食/减脂/训练建议，须先增加 data_query 任务（domain=body，params 含 include_latest_body=true）检索并确认最新身体数据，再 depends_on 该任务执行分析/回答。
-7. 若用户要「今天练背/安排训练计划/根据过往记录」，须先增加 data_query（domain=fitness，params 含 include_training_history=true，date_range 近30天），再 depends_on 执行分析与计划生成；「今天」是安排目标日，训练历史必须查近30天，不能只查今天。
+7. 若用户要「今天练 xxx /安排训练计划/根据过往记录」，须先增加 data_query（domain=fitness，params 含 include_training_history=true，date_range 近30天），再 depends_on 执行分析与计划生成；「今天」是安排目标日，训练历史必须查近30天，不能只查今天。
 8. 检索类任务与回答类任务必须拆分；回答任务 depends_on 所有检索任务。
 9. 最多 {_MAX_TASKS} 个任务。
 
