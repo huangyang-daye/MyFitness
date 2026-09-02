@@ -8,6 +8,8 @@ from datetime import date, timedelta
 
 from myfitness.schemas.state import Intent
 
+from myfitness.graph.context_reflection import needs_personalized_context
+
 _RECENT_DAYS_RE = re.compile(r"最?\s*近\s*(\d+)\s*天")
 # 「最近N天 / 过去N天 / 前N天」——要求含数字，避免误吞「前天」
 _PAST_DAYS_RE = re.compile(r"(?:最?\s*近|过[去了]?|前)\s*(\d+)\s*天")
@@ -27,6 +29,8 @@ class QueryPlan:
     domains: tuple[str, ...]
     metric_type: str | None = None
     meal_type: str | None = None
+    include_latest_body: bool = False
+    muscle_group: str | None = None
 
     @property
     def lookback_days(self) -> int:
@@ -43,11 +47,18 @@ def needs_database_query(intent: Intent, message: str) -> bool:
         return True
     if intent == Intent.GENERAL and _has_data_keywords(message):
         return True
+    if intent == Intent.GENERAL and needs_personalized_context(message):
+        return True
     return False
 
 
 _PROGRESS_END_RE = re.compile(r"(到今天|至今|到目前为止|到目前为止)")
 _PROGRESS_HINT_RE = re.compile(r"(进度|趋势|变化|对比|减肥|减脂|增肌|成效|效果)")
+# 「今天练背 + 参考过往记录」：今天是要安排的目标日，训练历史应查更宽窗口
+_HISTORY_FOR_TRAINING_PLAN_RE = re.compile(
+    r"(过往|历史|上次|以往|以前|结合|根据).*(训练|练|记录)|"
+    r"训练记录|练.*记录|记录.*练"
+)
 
 
 def build_query_plan(
@@ -72,6 +83,14 @@ def build_query_plan(
     domains = _infer_domains(message, intent, domain)
     metric_type = _infer_metric_type(message)
     meal_type = _infer_meal_type(message)
+    include_latest_body = needs_personalized_context(message) and intent in {
+        Intent.GENERAL,
+        Intent.WEB_SEARCH,
+        Intent.DATA_QUERY,
+        Intent.TREND_ANALYSIS,
+    }
+    if include_latest_body:
+        domains = _ensure_body_domain(domains)
 
     return QueryPlan(
         start_date=plan_start,
@@ -79,6 +98,7 @@ def build_query_plan(
         domains=domains,
         metric_type=metric_type,
         meal_type=meal_type,
+        include_latest_body=include_latest_body,
     )
 
 
@@ -224,6 +244,8 @@ def _parse_date_range(message: str, today: date, intent: Intent) -> tuple[date, 
 
     single = parse_single_date(message, today)
     if single is not None and intent != Intent.TREND_ANALYSIS:
+        if _needs_training_history_window(message):
+            return today - timedelta(days=29), today
         return single, single
 
     if single is not None and intent == Intent.TREND_ANALYSIS:
@@ -281,3 +303,16 @@ def _infer_meal_type(message: str) -> str | None:
         if kw in message:
             return meal
     return None
+
+
+def _ensure_body_domain(domains: tuple[str, ...]) -> tuple[str, ...]:
+    if "body" in domains:
+        return domains
+    return ("body", *domains)
+
+
+def _needs_training_history_window(message: str) -> bool:
+    """今天安排训练计划，但需参考历史记录时，不应把查询范围缩成单日。"""
+    if not _HISTORY_FOR_TRAINING_PLAN_RE.search(message):
+        return False
+    return any(k in message for k in TRAINING_KEYWORDS) or "练" in message

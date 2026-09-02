@@ -22,6 +22,21 @@ from myfitness.db.repositories.metrics import (
 from myfitness.xunji.parsers.training import parse_training_payload
 
 
+def _collect_latest_body_metrics(repo: BodyMetricRepository) -> dict:
+    latest: dict[str, dict] = {}
+    for metric_type in ("weight", "bodyfat"):
+        row = repo.get_latest(metric_type)
+        if row is None:
+            continue
+        latest[metric_type] = {
+            "value": float(row.value),
+            "unit": row.unit,
+            "date": row.record_date.isoformat(),
+            "source": row.source,
+        }
+    return latest
+
+
 @tool
 def query_body_metrics(
     session: Annotated[Session, InjectedToolArg],
@@ -55,7 +70,23 @@ def query_body_metrics(
             }
             for r in records
         ],
+        "latest_metrics": _collect_latest_metrics(repo),
     }
+
+
+def _collect_latest_metrics(repo: BodyMetricRepository) -> dict[str, dict]:
+    latest: dict[str, dict] = {}
+    for metric_type in ("weight", "bodyfat"):
+        row = repo.get_latest(metric_type)
+        if row is None:
+            continue
+        latest[metric_type] = {
+            "value": float(row.value),
+            "unit": row.unit,
+            "date": row.record_date.isoformat(),
+            "source": row.source,
+        }
+    return latest
 
 
 @tool
@@ -187,6 +218,8 @@ def execute_query_plan(
     end_date: date,
     metric_type: str | None = None,
     meal_type: str | None = None,
+    include_latest_body: bool = False,
+    muscle_group: str | None = None,
     on_progress: Annotated[Callable | None, InjectedToolArg] = None,
 ) -> dict[str, dict]:
     """按查询计划一次性执行一个或多个 domain（body / nutrition / training）的 DB 查询。
@@ -199,8 +232,19 @@ def execute_query_plan(
         meal_type: 餐型过滤，透传给 nutrition 查询。
     """
     from myfitness.graph.progress import emit, label_for
+    from myfitness.db.sql_logging import log_query_context
 
     results: dict[str, dict] = {}
+    log_query_context(
+        "execute_query_plan",
+        domains=domains,
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+        metric_type=metric_type,
+        meal_type=meal_type,
+        include_latest_body=include_latest_body,
+        muscle_group=muscle_group,
+    )
     if "body" in domains:
         emit(on_progress, f"{label_for('query_body_metrics')}…")
         results["body"] = invoke_tool(
@@ -211,6 +255,10 @@ def execute_query_plan(
             end_date=end_date,
             metric_type=metric_type,
         )
+        if include_latest_body:
+            results["body"]["latest_metrics"] = _collect_latest_body_metrics(
+                BodyMetricRepository(session, user_id)
+            )
     if "nutrition" in domains:
         emit(on_progress, f"{label_for('query_nutrition_logs')}…")
         results["nutrition"] = invoke_tool(
@@ -223,7 +271,28 @@ def execute_query_plan(
         )
     if "training" in domains or "fitness" in domains:
         emit(on_progress, f"{label_for('query_training_logs')}…")
-        results["training"] = invoke_tool(
+        training = invoke_tool(
             query_training_logs, session, user_id, start_date=start_date, end_date=end_date
         )
+        if muscle_group:
+            training = _filter_training_by_muscle(training, muscle_group)
+        results["training"] = training
     return results
+
+
+def _filter_training_by_muscle(data: dict, muscle_group: str) -> dict:
+    sessions: list[dict] = []
+    for session in data.get("sessions", []):
+        movements = []
+        for movement in session.get("movements", []):
+            muscle_type = str(movement.get("muscle_type") or movement.get("type") or "")
+            if muscle_group in muscle_type:
+                movements.append(movement)
+        if movements:
+            sessions.append({**session, "movements": movements})
+    return {
+        **data,
+        "sessions": sessions,
+        "count": len(sessions),
+        "muscle_group": muscle_group,
+    }

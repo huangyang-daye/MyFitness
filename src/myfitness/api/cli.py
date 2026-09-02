@@ -14,16 +14,18 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
 from myfitness.agents.tools.base import invoke_tool
 from myfitness.agents.tools.chart_tools import generate_chart, resolve_metric
+from myfitness.api.cli_progress import CliTurnProgress
 from myfitness.chat_history import ChatHistoryError, ChatHistoryStore
 from myfitness.config import get_settings
 from myfitness.db.repositories.reports import DailyReportRepository, ScheduledTaskRepository
 from myfitness.db.session import get_or_create_default_user, session_scope
-from myfitness.debug import configure_debug_logging
+from myfitness.debug import configure_debug_logging, debug_enabled, debug_enabled
 from myfitness.graph.chat import (
     finalize_streamed_reply,
     iter_chat_turn,
@@ -80,15 +82,38 @@ LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 
 def _setup_logging(debug: bool | None = None) -> None:
     settings = get_settings()
-    debug_enabled = bool(getattr(settings, "debug_mode", False)) if debug is None else debug
+    tracing_enabled = bool(getattr(settings, "debug_mode", False)) if debug is None else debug
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        force=debug_enabled,
+        force=tracing_enabled,
     )
-    configure_debug_logging(debug_enabled)
-    if debug_enabled:
+    configure_debug_logging(tracing_enabled)
+    from myfitness.db.sql_logging import configure_sql_logging
+
+    configure_sql_logging()
+    if tracing_enabled:
         logging.getLogger(__name__).debug("Debug mode enabled")
+
+
+def _configure_interactive_chat_logging() -> None:
+    """交互式 chat 默认不向控制台输出 log；--debug 时保留完整日志。"""
+    if debug_enabled():
+        return
+    root = logging.getLogger()
+    root.setLevel(logging.WARNING)
+    for name in (
+        "myfitness",
+        "myfitness.debug",
+        "myfitness.sql",
+        "sqlalchemy",
+        "sqlalchemy.engine",
+        "sqlalchemy.engine.Engine",
+        "httpx",
+        "httpcore",
+        "urllib3",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 @app.callback()
@@ -949,6 +974,12 @@ def _run_llm_warmup() -> LlmWarmupResult:
 
 def _warmup_database(user_id: int) -> None:
     """预热数据库连接，避免首条消息才建立 PostgreSQL 连接。"""
+    if debug_enabled():
+        from myfitness.db.sql_logging import configure_sql_logging, is_sql_echo_enabled
+
+        configure_sql_logging()
+        if is_sql_echo_enabled():
+            console.print("[dim]SQL 查询日志已开启（SQL_ECHO 或 DEBUG_MODE）[/dim]")
     try:
         with (
             console.status("[bold cyan]正在连接数据库…[/bold cyan]", spinner="dots"),
@@ -1013,8 +1044,8 @@ def _active_model_label() -> str:
     return f"{preset.name} · {preset.model}"
 
 
-def _render_chat_home() -> None:
-    """Render the initial CLI home without creating a chat session."""
+def _render_chat_home_layout() -> None:
+    """首页双栏布局（不含输入框）。"""
     console.clear()
     left = Panel(
         Align.center(Text(_HOME_SILHOUETTE, style="bold green"), vertical="middle"),
@@ -1032,7 +1063,8 @@ def _render_chat_home() -> None:
     info.append("  exit     退出\n\n")
     info.append("TIPS\n", style="bold green")
     info.append("  直接描述目标、饮食、训练或身体数据。\n")
-    info.append("  首条消息提交后才会创建会话。\n\n")
+    info.append("  首条消息提交后才会创建会话。\n")
+    info.append("  复杂问题会显示 Planner 任务列表（与 Web 一致）。\n\n")
     info.append("MODEL\n", style="bold green")
     info.append(f"  {_active_model_label()}", style="bright_white")
     right = Panel(info, border_style="green", box=box.SQUARE, padding=(1, 2))
@@ -1044,15 +1076,33 @@ def _render_chat_home() -> None:
     separator = Text("\n".join("│" for _ in range(19)), style="green")
     layout.add_row(left, separator, right)
     console.print(layout)
-    console.print(
-        Panel(
-            "[dim]输入消息并回车开始对话；空输入不会创建会话[/dim]",
-            title="[bold green]对话输入[/bold green]",
-            border_style="green",
-            box=box.ROUNDED,
-            padding=(0, 1),
-        )
-    )
+
+
+def _render_chat_home() -> None:
+    """Render the initial CLI home without creating a chat session."""
+    _render_chat_home_layout()
+
+
+def _chat_input_hint(*, on_home: bool) -> str:
+    if on_home:
+        return "输入消息并回车开始对话；空输入不会创建会话"
+    return "/model 切换模型 · /resume 恢复 · /help 帮助 · exit 退出"
+
+
+def _read_chat_input(*, on_home: bool = False) -> str:
+    """读取用户输入，上方以横线分隔。"""
+    if on_home:
+        _render_chat_home_layout()
+
+    hint = _chat_input_hint(on_home=on_home)
+    console.print(Rule(style="green"))
+    console.print(f"[dim]{hint}[/dim]")
+    try:
+        text = console.input("[bold green]>[/bold green] ")
+    except (EOFError, KeyboardInterrupt):
+        console.print()
+        raise
+    return text.strip()
 
 
 def _render_conversation_page(state: Any, *, replay_history: bool = False) -> None:
@@ -1374,6 +1424,7 @@ def chat(
     ),
 ) -> None:
     """启动多 Agent 对话（对话自动保存到 <DATA_DIR>/chat-history/<UUID>.json）。"""
+    _configure_interactive_chat_logging()
     settings = get_settings()
     history = ChatHistoryStore()
     state: Any | None = None
@@ -1398,38 +1449,28 @@ def chat(
         _warmup_database(settings.default_user_id)
         runtime_ready = True
 
-    def _process(text: str) -> None:
+    def _run_turn_with_progress(text: str) -> None:
         nonlocal state
-        # 首页先显示且允许切模型/恢复会话；仅首条普通消息触发运行时预热。
-        _ensure_runtime_ready()
-        if state is None:
-            # 首页阶段不注册空会话；第一条普通消息提交后才创建。
-            state = new_chat_state(user_id=settings.default_user_id)
-            history.save(state)
-            _render_conversation_page(state)
-        progress_log: list[str] = []
+        tracker = CliTurnProgress()
 
-        def on_progress(msg: str) -> None:
-            progress_log.append(msg)
-            status.update(f"[bold cyan]{msg}[/bold cyan]")
+        def on_progress(msg) -> None:
+            tracker.handle(msg)
+            live.update(tracker.renderable())
 
-        with console.status("[bold cyan]处理中…[/bold cyan]", spinner="dots") as status:
+        with Live(tracker.renderable(), console=console, refresh_per_second=8) as live:
             if no_stream:
                 with session_scope() as session:
                     get_or_create_default_user(session, settings.default_user_id)
                     state = run_chat_turn(session, state, text, on_progress=on_progress)
-                # 数据库事务提交成功后再持久化对话，避免 JSON 与数据库状态不一致。
                 history.save(state)
-                status.stop()
-                _print_progress_log(progress_log)
+                live.stop()
                 console.print(f"\n[bold cyan]MyFitness[/bold cyan]\n{state.reply}\n")
                 return
 
             with session_scope() as session:
                 get_or_create_default_user(session, settings.default_user_id)
                 state, chunks = iter_chat_turn(session, state, text, on_progress=on_progress)
-                status.stop()
-                _print_progress_log(progress_log)
+                live.stop()
                 console.print("\n[bold cyan]MyFitness[/bold cyan]")
                 reply_parts: list[str] = []
                 for chunk in chunks:
@@ -1445,22 +1486,35 @@ def chat(
                     f"约 {60}s 后自动恢复探测。[/yellow]"
                 )
 
+    def _process(text: str) -> None:
+        nonlocal state
+        # 首页先显示且允许切模型/恢复会话；仅首条普通消息触发运行时预热。
+        _ensure_runtime_ready()
+        if state is None:
+            # 首页阶段不注册空会话；第一条普通消息提交后才创建。
+            state = new_chat_state(user_id=settings.default_user_id)
+            history.save(state)
+            _render_conversation_page(state)
+        _run_turn_with_progress(text)
+
     if message:
         _process(message)
         return
 
     if once:
-        if state is None:
-            _render_chat_home()
-        text = typer.prompt("你")
+        try:
+            text = _read_chat_input(on_home=state is None)
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n再见。")
+            return
         _process(text)
         return
 
     if state is None:
-        _render_chat_home()
+        pass  # 首页在首次 _read_chat_input(on_home=True) 时渲染
     while True:
         try:
-            text = console.input("[bold green]>[/bold green] ").strip()
+            text = _read_chat_input(on_home=state is None)
         except (EOFError, KeyboardInterrupt):
             console.print("\n再见。")
             break
@@ -1490,14 +1544,6 @@ def ui(
     from myfitness.api.web import run_web_ui
 
     run_web_ui(host=host, port=port, open_browser=not no_open)
-
-
-def _print_progress_log(steps: list[str]) -> None:
-    """将本轮 Agent/Tool 调用步骤打印为一行摘要。"""
-    if not steps:
-        return
-    cleaned = [s.rstrip("…").rstrip(".") for s in steps]
-    console.print(f"[dim]› {' → '.join(cleaned)}[/dim]")
 
 
 if __name__ == "__main__":

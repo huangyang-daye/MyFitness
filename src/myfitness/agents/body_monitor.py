@@ -72,16 +72,25 @@ def run_body_agent(context: ContextSnapshot, analysis_date: date | None = None) 
 
 def _current_metrics_from_context(context: ContextSnapshot, summary: dict) -> CurrentMetrics:
     body_query = (context.query_results or {}).get("body")
-    if body_query and body_query.get("records"):
-        latest_weight = None
-        latest_bodyfat = None
-        # records 按 record_date desc 排序，取每种指标的第一条即为最新
-        for r in body_query["records"]:
-            if r["metric_type"] == "weight" and latest_weight is None:
-                latest_weight = r["value"]
-            elif r["metric_type"] == "bodyfat" and latest_bodyfat is None:
-                latest_bodyfat = r["value"]
-        return CurrentMetrics(weight_kg=latest_weight, bodyfat_pct=latest_bodyfat)
+    if body_query:
+        latest_metrics = body_query.get("latest_metrics") or {}
+        weight_info = latest_metrics.get("weight")
+        bodyfat_info = latest_metrics.get("bodyfat")
+        if isinstance(weight_info, dict) and weight_info.get("value") is not None:
+            bodyfat = None
+            if isinstance(bodyfat_info, dict) and bodyfat_info.get("value") is not None:
+                bodyfat = bodyfat_info["value"]
+            return CurrentMetrics(weight_kg=weight_info["value"], bodyfat_pct=bodyfat)
+        if body_query.get("records"):
+            latest_weight = None
+            latest_bodyfat = None
+            # records 按 record_date desc 排序，取每种指标的第一条即为最新
+            for r in body_query["records"]:
+                if r["metric_type"] == "weight" and latest_weight is None:
+                    latest_weight = r["value"]
+                elif r["metric_type"] == "bodyfat" and latest_bodyfat is None:
+                    latest_bodyfat = r["value"]
+            return CurrentMetrics(weight_kg=latest_weight, bodyfat_pct=latest_bodyfat)
 
     return CurrentMetrics(
         weight_kg=summary.get("latest_weight_kg"),

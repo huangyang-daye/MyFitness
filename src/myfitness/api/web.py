@@ -265,9 +265,13 @@ class AgentWebApplication:
             assert state is not None
             progress: list[str] = []
 
-            def on_progress(msg: str) -> None:
+            def on_progress(msg) -> None:
                 progress.append(msg)
-                emit_event("progress", {"text": msg})
+                if isinstance(msg, dict):
+                    event = str(msg.get("type") or "progress")
+                    emit_event(event, msg)
+                else:
+                    emit_event("progress", {"text": msg})
 
             with session_scope() as session:
                 get_or_create_default_user(session, state.user_id)
@@ -735,6 +739,11 @@ def run_web_ui(
     project_root: str | Path = PROJECT_ROOT,
 ) -> None:
     """Run the local UI until interrupted."""
+    from myfitness.db.sql_logging import configure_sql_logging, is_sql_echo_enabled
+
+    configure_sql_logging()
+    if is_sql_echo_enabled():
+        print("SQL 查询日志已开启（SQL_ECHO 或 DEBUG_MODE）")
     # Bind first. If the port is occupied, fail before APScheduler creates a
     # background thread that could keep an otherwise failed process alive.
     app = AgentWebApplication(project_root)

@@ -122,6 +122,7 @@ class ContextSnapshot(BaseModel):
     memory_short_term: str = ""
     memory_long_term: str = ""
     user_profile: dict[str, Any] = Field(default_factory=dict)
+    reflection_notes: str = ""
 
 
 class PendingConfirmation(BaseModel):

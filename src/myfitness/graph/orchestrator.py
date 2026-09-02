@@ -21,10 +21,11 @@ from myfitness.agents.nutritionist import run_nutrition_agent
 from myfitness.agents.summary import run_summary_agent, should_stream_summary
 from myfitness.agents.tools.query_planner import QueryPlan, build_query_plan
 from myfitness.db.repositories.goals import UserGoalRepository
+from myfitness.graph.context_reflection import reflect_before_answer
 from myfitness.graph.judge import judge_turn, max_judge_attempts
 from myfitness.graph.planner import build_task_plan
-from myfitness.graph.progress import ProgressCallback, emit, label_for
-from myfitness.graph.task_plan import ExecutionResult, PlannedTask, TaskPlan, TaskResult
+from myfitness.graph.progress import ProgressCallback, emit_plan, emit_step, emit_task_status, label_for
+from myfitness.graph.task_plan import ExecutionResult, JudgeVerdict, PlannedTask, TaskPlan, TaskResult
 from myfitness.memory.manager import attach_memory
 from myfitness.memory.types import MemoryBundle
 from myfitness.schemas.agent_outputs import AgentOutputs
@@ -58,11 +59,17 @@ def run_orchestrated_turn(
     """
     llm_enabled = use_llm
     task_plan = plan or build_task_plan(state.user_message, route, use_llm=llm_enabled)
+    emit_plan(on_progress, task_plan)
     execution = ExecutionResult()
     retry_ids: set[str] = set()
+    fetch_task_ids = [
+        task.id
+        for task in task_plan.tasks
+        if task.intent == Intent.DATA_QUERY and task.params.get("include_latest_body")
+    ]
 
     for attempt in range(1, max_judge_attempts() + 1):
-        emit(on_progress, f"{label_for('planner')}（第 {attempt} 轮）…")
+        emit_step(on_progress, f"{label_for('planner')}（第 {attempt} 轮）…")
         execution = _execute_plan(
             session,
             state,
@@ -75,14 +82,34 @@ def run_orchestrated_turn(
         if execution.needs_confirmation:
             return execution, False
 
-        emit(on_progress, f"{label_for('judge')}…")
-        verdict = judge_turn(
+        emit_step(on_progress, f"{label_for('context_reflection')}…")
+        reflection = reflect_before_answer(
             state.user_message,
-            task_plan,
             execution,
-            attempt=attempt,
+            fetch_task_ids=fetch_task_ids,
             use_llm=llm_enabled,
         )
+        if reflection.confirmed_notes and execution.context:
+            execution.context = execution.context.model_copy(
+                update={"reflection_notes": reflection.confirmed_notes}
+            )
+
+        emit_step(on_progress, f"{label_for('judge')}…")
+        if not reflection.ready:
+            verdict = JudgeVerdict(
+                satisfied=False,
+                feedback=reflection.feedback or "个体数据尚未从数据库确认",
+                missing=reflection.missing_fetches,
+                retry_task_ids=reflection.retry_task_ids or fetch_task_ids,
+            )
+        else:
+            verdict = judge_turn(
+                state.user_message,
+                task_plan,
+                execution,
+                attempt=attempt,
+                use_llm=llm_enabled,
+            )
         if verdict.satisfied:
             break
         retry_ids = set(verdict.retry_task_ids)
@@ -97,7 +124,7 @@ def run_orchestrated_turn(
         if attempt >= max_judge_attempts():
             break
 
-    emit(on_progress, f"{label_for('summary')}…")
+    emit_step(on_progress, f"{label_for('summary')}…")
     execution.agent_outputs.summary = run_summary_agent(
         execution.agent_outputs,
         execution.context,
@@ -134,10 +161,17 @@ def _execute_plan(
                 continue
             if retry_task_ids and task.id not in retry_task_ids:
                 continue
+            emit_task_status(on_progress, task.id, "running", description=task.description)
             result = _execute_task(
                 session, state, route, plan, task, memory_bundle, execution, on_progress
             )
             execution.task_results.append(result)
+            emit_task_status(
+                on_progress,
+                task.id,
+                result.status,
+                description=result.summary or task.description,
+            )
             if result.status == "pending_confirmation":
                 execution.needs_confirmation = True
                 return execution
@@ -282,7 +316,12 @@ def _run_analysis_task(
     execution: ExecutionResult,
     on_progress: ProgressCallback | None,
 ) -> TaskResult:
-    emit(on_progress, f"{label_for('load_context')}…")
+    from dataclasses import replace
+
+    from datetime import date as date_cls
+
+    today = date_cls.today()
+    emit_step(on_progress, f"{label_for('load_context')}…")
     query_plan = build_query_plan(
         state.user_message,
         task.intent,
@@ -290,6 +329,35 @@ def _run_analysis_task(
         start_date=task.start_date or route.start_date,
         end_date=task.end_date or route.end_date,
     )
+    if task.params.get("include_training_history"):
+        muscle = task.params.get("muscle_group")
+        if query_plan is None:
+            query_plan = QueryPlan(
+                start_date=task.start_date or today - timedelta(days=29),
+                end_date=task.end_date or today,
+                domains=("training",),
+                muscle_group=muscle,
+            )
+        else:
+            domains = query_plan.domains
+            if "training" not in domains:
+                domains = (*domains, "training")
+            query_plan = replace(
+                query_plan,
+                domains=domains,
+                start_date=task.start_date or query_plan.start_date,
+                end_date=task.end_date or query_plan.end_date,
+                muscle_group=muscle or query_plan.muscle_group,
+            )
+    if task.params.get("include_latest_body") and query_plan is not None:
+        domains = query_plan.domains
+        if "body" not in domains:
+            domains = ("body", *domains)
+        query_plan = replace(
+            query_plan,
+            include_latest_body=True,
+            domains=domains,
+        )
     context, tools = load_context_for_turn(
         session,
         state.user_id,
@@ -305,7 +373,7 @@ def _run_analysis_task(
         context = attach_memory(context, memory_bundle)
         tools.append("memory")
 
-    execution.context = context
+    _merge_execution_context(execution, context)
     for tool in tools:
         if tool not in execution.tools_invoked:
             execution.tools_invoked.append(tool)
@@ -333,12 +401,12 @@ def _run_specialists(
 
     def _run_one(name: str):
         if name == "body":
-            emit(on_progress, f"{label_for('body_monitor')}…")
+            emit_step(on_progress, f"{label_for('body_monitor')}…")
             return name, run_body_agent(context)
         if name == "nutrition":
-            emit(on_progress, f"{label_for('nutritionist')}…")
+            emit_step(on_progress, f"{label_for('nutritionist')}…")
             return name, run_nutrition_agent(context)
-        emit(on_progress, f"{label_for('fitness_planner')}…")
+        emit_step(on_progress, f"{label_for('fitness_planner')}…")
         return name, run_fitness_agent(context)
 
     if parallel and len(agents) > 1:
@@ -366,6 +434,10 @@ def _store_agent_output(name: str, output, execution: ExecutionResult) -> None:
 
 
 def _agents_for_task(task: PlannedTask, plan: QueryPlan | None) -> list[str]:
+    if task.params.get("scope") == "confirm":
+        return ["body"]
+    if task.params.get("scope") == "training_history":
+        return ["fitness"]
     domain_to_agent = {
         "body": "body",
         "nutrition": "nutrition",
@@ -384,6 +456,32 @@ def _agents_for_task(task: PlannedTask, plan: QueryPlan | None) -> list[str]:
         agent = domain_to_agent.get(task.domain)
         return [agent] if agent else ["body"]
     return ["body", "nutrition", "fitness"]
+
+
+def _merge_execution_context(execution: ExecutionResult, new_context) -> None:
+    """合并多轮任务产生的查询结果与上下文。"""
+    if execution.context is None:
+        execution.context = new_context
+        return
+
+    old = execution.context
+    merged_qr = {**(old.query_results or {}), **(new_context.query_results or {})}
+    if "body" in (old.query_results or {}) and "body" in (new_context.query_results or {}):
+        body = {**(old.query_results or {})["body"], **new_context.query_results["body"]}
+        latest = new_context.query_results["body"].get("latest_metrics")
+        if latest:
+            body["latest_metrics"] = latest
+        merged_qr["body"] = body
+
+    execution.context = new_context.model_copy(
+        update={
+            "query_results": merged_qr,
+            "reflection_notes": new_context.reflection_notes or old.reflection_notes,
+            "user_goals": new_context.user_goals or old.user_goals,
+            "memory_long_term": new_context.memory_long_term or old.memory_long_term,
+            "memory_short_term": new_context.memory_short_term or old.memory_short_term,
+        }
+    )
 
 
 def _task_levels(tasks: list[PlannedTask]) -> list[list[PlannedTask]]:

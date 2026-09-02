@@ -1294,13 +1294,72 @@ function showProgress() {
   messages.insertAdjacentHTML("beforeend", `
     <article class="message progress-message" id="progressMessage">
       <div class="message-avatar">${icons.agent}</div>
-      <div class="message-content"><div class="typing-dots"><i></i><i></i><i></i></div><span>正在理解你的问题…</span></div>
+      <div class="message-content">
+        <div class="turn-task-panel" id="turnTaskPanel" hidden>
+          <div class="turn-task-head">
+            <strong>任务计划</strong>
+            <span class="turn-task-requirements" id="turnTaskRequirements"></span>
+          </div>
+          <ul class="turn-task-list" id="turnTaskList"></ul>
+        </div>
+        <div class="progress-current">
+          <div class="typing-dots"><i></i><i></i><i></i></div>
+          <span id="progressCurrentText">正在理解你的问题…</span>
+        </div>
+      </div>
     </article>`);
   scrollToBottom();
 }
 
+const TURN_TASK_STATUS_LABEL = {
+  pending: "待执行",
+  running: "进行中",
+  success: "已完成",
+  failed: "失败",
+  skipped: "已跳过",
+  pending_confirmation: "待确认",
+};
+
+function renderTurnTaskPlan(tasks, requirements) {
+  const panel = el("turnTaskPanel");
+  const list = el("turnTaskList");
+  const req = el("turnTaskRequirements");
+  if (!panel || !list) return;
+  if (!tasks?.length) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  if (req) req.textContent = requirements ? `：${requirements}` : "";
+  list.innerHTML = tasks.map((task) => `
+    <li class="turn-task-item" data-task-id="${escapeHtml(task.id)}" data-status="${escapeHtml(task.status || "pending")}">
+      <span class="turn-task-dot" aria-hidden="true"></span>
+      <div class="turn-task-copy">
+        <strong>${escapeHtml(task.description || task.intent || task.id)}</strong>
+        <span class="turn-task-meta">${escapeHtml(task.domain || task.intent || "")}</span>
+      </div>
+      <span class="turn-task-state">${escapeHtml(TURN_TASK_STATUS_LABEL[task.status] || task.status || "待执行")}</span>
+    </li>`).join("");
+  scrollToBottom();
+}
+
+function updateTurnTaskStatus(taskId, status, description) {
+  const item = document.querySelector(`.turn-task-item[data-task-id="${CSS.escape(taskId)}"]`);
+  if (!item) return;
+  item.dataset.status = status;
+  const state = item.querySelector(".turn-task-state");
+  if (state) state.textContent = TURN_TASK_STATUS_LABEL[status] || status;
+  if (description) {
+    const title = item.querySelector(".turn-task-copy strong");
+    if (title && (status === "success" || status === "failed")) {
+      title.textContent = description;
+    }
+  }
+  scrollToBottom();
+}
+
 function updateProgress(text) {
-  const span = document.querySelector("#progressMessage span");
+  const span = el("progressCurrentText");
   if (span && text) span.textContent = text;
 }
 
@@ -1417,6 +1476,14 @@ async function readSessionStream(text) {
   let streamError = null;
 
   const handleEvent = async (event, data) => {
+    if (event === "task_plan") {
+      renderTurnTaskPlan(data.tasks, data.user_requirements);
+      return;
+    }
+    if (event === "task_status") {
+      updateTurnTaskStatus(data.task_id, data.status, data.description);
+      return;
+    }
     if (event === "progress") {
       updateProgress(data.text);
       return;

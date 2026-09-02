@@ -14,12 +14,16 @@ _SessionLocal = None
 def get_engine():
     global _engine
     if _engine is None:
+        from myfitness.db.sql_logging import configure_sql_logging, is_sql_echo_enabled
+
+        configure_sql_logging()
         settings = get_settings()
         _engine = create_engine(
             settings.database_url,
             pool_pre_ping=True,
             pool_recycle=3600,
             connect_args={"connect_timeout": settings.db_connect_timeout},
+            echo=is_sql_echo_enabled(),
         )
     return _engine
 

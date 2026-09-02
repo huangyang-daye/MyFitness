@@ -102,6 +102,17 @@ def test_build_query_plan_progress_until_today_not_single_day():
     assert plan.lookback_days == 30
 
 
+def test_build_query_plan_back_day_uses_history_not_today_only():
+    """「今天练背 + 参考过往记录」应查近 30 天训练，而非仅今天。"""
+    today = date(2026, 9, 2)
+    message = "按照安排，今天是练背日，根据我过往的训练记录，帮我安排一下今天的计划"
+    plan = build_query_plan(message, Intent.GENERAL, today=today)
+    assert plan is not None
+    assert plan.start_date == date(2026, 8, 4)
+    assert plan.end_date == today
+    assert "training" in plan.domains
+
+
 def test_query_nutrition_logs(db_session):
     db_session.add(
         NutritionLog(

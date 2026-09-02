@@ -32,6 +32,19 @@ def _format_body(data: dict) -> str:
     lines = [
         f"【数据库·身体数据】{data['start_date']} ~ {data['end_date']}，共 {data['count']} 条"
     ]
+    latest = data.get("latest_metrics") or {}
+    weight = latest.get("weight")
+    if isinstance(weight, dict) and weight.get("value") is not None:
+        lines.append(
+            f"- 【全库最新体重】{weight['value']}{weight.get('unit', 'kg')} "
+            f"（{weight.get('date')}，{weight.get('source')}）"
+        )
+    bodyfat = latest.get("bodyfat")
+    if isinstance(bodyfat, dict) and bodyfat.get("value") is not None:
+        lines.append(
+            f"- 【全库最新体脂】{bodyfat['value']}{bodyfat.get('unit', '%')} "
+            f"（{bodyfat.get('date')}，{bodyfat.get('source')}）"
+        )
     for r in data.get("records", [])[:50]:
         lines.append(
             f"- {r['date']} {r['metric_type']}: {r['value']}{r['unit']} ({r['source']})"

@@ -7,6 +7,7 @@ import logging
 import re
 
 from myfitness.debug import trace_agent
+from myfitness.graph.context_reflection import needs_body_metrics_confirmation
 from myfitness.graph.task_plan import ExecutionResult, JudgeVerdict, TaskPlan
 from myfitness.llm.factory import chat_completion, is_llm_configured
 
@@ -60,6 +61,7 @@ def _llm_judge(
 - 若用户同时要求「录入数据」和「评价进度」，仅完成录入确认而没有任何进度评价，则 satisfied=false。
 - 若解析出的数值明显错误（如体重=2025kg），satisfied=false。
 - 若仍在等待用户确认写入（needs_confirmation=true），且用户还要求分析/评价，则 satisfied=false。
+- 若用户要求个性化饮食/减脂建议且回答会涉及体重，但执行结果中缺少数据库 latest_metrics 或身体 Agent 的最新体重，satisfied=false。
 - 若用户要求保存/导出为 PDF、Word、Markdown 等文档，文件由系统在回复后自动落盘；只需检查分析/建议内容是否充分，不要因为尚未看到文件路径而判失败。
 - 最多允许 {_MAX_RETRIES} 次重做；当前为第 {attempt} 次评估。
 
@@ -129,6 +131,16 @@ def _rule_judge(user_message: str, plan: TaskPlan, execution: ExecutionResult) -
             missing.append("未能正确解析或准备手动录入")
         if any("2025.0" in item.summary for item in execution.task_results):
             missing.append("录入数值解析错误（疑似把年份当成体重/体脂）")
+
+    if needs_body_metrics_confirmation(user_message):
+        body = ((execution.context.query_results or {}).get("body") if execution.context else {}) or {}
+        has_latest = bool((body.get("latest_metrics") or {}).get("weight"))
+        has_body_agent = bool(
+            execution.agent_outputs.body
+            and execution.agent_outputs.body.current_metrics.weight_kg is not None
+        )
+        if not has_latest and not has_body_agent:
+            missing.append("个性化建议需要先检索数据库最新身体指标")
 
     if missing:
         return JudgeVerdict(

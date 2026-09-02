@@ -77,6 +77,19 @@ class BodyMetricRepository:
         stmt = stmt.order_by(BodyMetric.record_date.desc())
         return list(self.session.scalars(stmt).all())
 
+    def get_latest(self, metric_type: str) -> BodyMetric | None:
+        """全库按记录日期取最新一条指标（用于「当前体重」等语义）。"""
+        stmt = (
+            select(BodyMetric)
+            .where(
+                BodyMetric.user_id == self.user_id,
+                BodyMetric.metric_type == metric_type,
+            )
+            .order_by(BodyMetric.record_date.desc(), BodyMetric.id.desc())
+            .limit(1)
+        )
+        return self.session.scalar(stmt)
+
     def get_effective_value(self, record_date: date, metric_type: str) -> BodyMetric | None:
         """manual 优先于 xunji_sync。"""
         manual = self.session.scalar(

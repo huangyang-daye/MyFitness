@@ -22,7 +22,7 @@ def run_nutrition_agent(
     summary = context.nutrition_summary
     daily = _daily_totals_from_context(context, summary)
 
-    weight = context.body_metrics_summary.get("latest_weight_kg") or 70
+    weight = _weight_kg_from_context(context) or 70
     tdee = TdeeEstimate(
         bmr=round(10 * weight + 6.25 * 170 - 5 * 30 + 5, 0),  # 默认假设，缺 profile
         activity_factor=1.55,
@@ -94,6 +94,15 @@ def _build_narrative(daily: DailyTotals, context: ContextSnapshot) -> str:
     if daily.calories:
         return f"今日摄入约 {daily.calories:.0f} kcal，蛋白质 {daily.protein_g:.0f} g。"
     return "今日暂无饮食记录。"
+
+
+def _weight_kg_from_context(context: ContextSnapshot) -> float | None:
+    body = (context.query_results or {}).get("body") or {}
+    latest = (body.get("latest_metrics") or {}).get("weight")
+    if isinstance(latest, dict) and latest.get("value") is not None:
+        return float(latest["value"])
+    summary_weight = context.body_metrics_summary.get("latest_weight_kg")
+    return float(summary_weight) if summary_weight is not None else None
 
 
 def _assess_balance(daily: DailyTotals, tdee: TdeeEstimate) -> str:

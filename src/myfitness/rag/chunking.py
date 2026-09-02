@@ -166,7 +166,7 @@ def _collect_nutrition_chunks(
         total_cal = 0.0
         total_protein = 0.0
         for entry in entries:
-            ntr = entry.nutrients_snapshot or {}
+            ntr = entry.nutrients_snapshot if isinstance(entry.nutrients_snapshot, dict) else {}
             cal = float(ntr.get("cal") or ntr.get("calories") or 0)
             protein = float(ntr.get("protein") or ntr.get("protein_g") or 0)
             total_cal += cal
@@ -220,13 +220,15 @@ def _collect_training_chunks(
 
 
 def _format_training_chunk(row: TrainingLog) -> str:
-    payload = row.raw_payload or {}
+    payload = row.raw_payload if isinstance(row.raw_payload, dict) else {}
     title = row.title or payload.get("title") or "训练"
     lines = [f"{row.record_date.isoformat()} 训练：{title}"]
-    movements = payload.get("movements") or []
+    movements = payload.get("movements") or [] if isinstance(payload, dict) else []
     for movement in movements:
+        if not isinstance(movement, dict):
+            continue
         name = movement.get("name") or "动作"
-        sets_text = format_movement_sets(movement.get("sets") or [])
+        sets_text = format_movement_sets(movement)
         lines.append(f"- {name}：{sets_text}" if sets_text else f"- {name}")
     if not movements:
         lines.append("（无动作明细）")
@@ -246,7 +248,8 @@ def _collect_report_chunks(
 
     chunks: list[ChunkDocument] = []
     for row in rows:
-        period = (row.agent_outputs or {}).get("period") or {}
+        outputs = row.agent_outputs if isinstance(row.agent_outputs, dict) else {}
+        period = outputs.get("period") if isinstance(outputs.get("period"), dict) else {}
         period_start = period.get("start_date")
         period_end = period.get("end_date")
         if period_start and period_end and period_start != period_end:

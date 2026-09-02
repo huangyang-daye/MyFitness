@@ -61,6 +61,10 @@ def build_document_messages(
             )
     if context and context.memory_long_term.strip():
         parts.append("【用户画像】\n" + context.memory_long_term.strip())
+    if context and context.reflection_notes.strip():
+        parts.append(
+            "【上下文反思 — 已从数据库确认的个体事实】\n" + context.reflection_notes.strip()
+        )
     if context and context.memory_short_term.strip():
         parts.append("【本轮会话要点】\n" + context.memory_short_term.strip())
     if context and context.data_gaps:

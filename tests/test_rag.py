@@ -59,6 +59,38 @@ def test_collect_body_chunks(db_session):
     assert "72.5" in chunks[0].content
 
 
+def test_collect_training_chunks(db_session):
+    from myfitness.db.models import TrainingLog
+
+    db_session.add(
+        TrainingLog(
+            user_id=1,
+            record_date=date(2026, 9, 1),
+            title="腿臀",
+            raw_payload={
+                "localid": 1,
+                "datestr": "2026-09-01",
+                "title": "腿臀",
+                "movements": [
+                    {
+                        "name": "深蹲",
+                        "sets": [
+                            {"done": True, "weight": "60", "unit": "kg", "reps": "8"},
+                        ],
+                    }
+                ],
+            },
+            source="xunji",
+        )
+    )
+    db_session.flush()
+    chunks = collect_chunks(db_session, 1, start_date=date(2026, 9, 1), end_date=date(2026, 9, 1))
+    training = [c for c in chunks if c.domain == "fitness"]
+    assert len(training) == 1
+    assert "深蹲" in training[0].content
+    assert "60kg×8" in training[0].content
+
+
 def test_should_retrieve_respects_intent():
     with patch("myfitness.rag.retriever.get_settings") as settings_mock:
         settings_mock.return_value.rag_enabled = True

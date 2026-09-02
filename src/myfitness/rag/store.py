@@ -185,6 +185,9 @@ def search_chunks(
         """
     )
 
+    from myfitness.db.sql_logging import log_raw_sql
+
+    log_raw_sql(str(sql), params)
     rows = session.execute(sql, params).mappings().all()
     results: list[RetrievedChunk] = []
     for row in rows:

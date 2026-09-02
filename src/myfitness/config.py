@@ -67,6 +67,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     debug_mode: bool = False
+    sql_echo: bool = False
     default_user_id: int = 1
 
     sync_default_days: int = 90

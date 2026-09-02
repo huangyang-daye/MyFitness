@@ -71,6 +71,8 @@ def load_context_for_turn(
             metric_type=plan.metric_type,
             meal_type=plan.meal_type,
             on_progress=on_progress,
+            include_latest_body=plan.include_latest_body,
+            muscle_group=plan.muscle_group,
         )
         for domain_key, result in query_results.items():
             tools_invoked.append(result.get("tool", f"query_{domain_key}"))

@@ -95,6 +95,10 @@ def build_rule_based_summary(
     if memory_section:
         sections.append(memory_section)
 
+    reflection_section = _format_reflection(context)
+    if reflection_section:
+        sections.append(reflection_section)
+
     if intent == Intent.GENERAL:
         greeting = "你好！我是 MyFitness 健康助手，可以帮你查询数据、记录饮食/体重、分析趋势。"
         if not any("MyFitness" in section for section in sections):
@@ -144,6 +148,9 @@ def build_summary_messages(
     memory_section = _format_memory(context)
     if memory_section:
         parts.append(memory_section)
+    reflection_section = _format_reflection(context)
+    if reflection_section:
+        parts.append(reflection_section)
     if context and context.data_gaps:
         parts.append("【数据缺口】\n" + "\n".join(f"- {g}" for g in context.data_gaps))
 
@@ -258,6 +265,12 @@ def _format_web_search(context: ContextSnapshot | None) -> str:
     if not context or not context.web_search_results:
         return ""
     return format_web_search_results(context.web_search_results)
+
+
+def _format_reflection(context: ContextSnapshot | None) -> str:
+    if not context or not context.reflection_notes.strip():
+        return ""
+    return "【上下文反思 — 已从数据库确认的个体事实】\n" + context.reflection_notes.strip()
 
 
 def _format_memory(context: ContextSnapshot | None) -> str:

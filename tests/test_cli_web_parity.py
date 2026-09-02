@@ -304,7 +304,7 @@ def test_home_page_contains_layout_help_model_and_input(monkeypatch):
     assert "/model" in rendered
     assert "/resume" in rendered
     assert "MODEL" in rendered
-    assert "对话输入" in rendered
+    assert "Planner" in rendered
     assert "██" in rendered
 
 

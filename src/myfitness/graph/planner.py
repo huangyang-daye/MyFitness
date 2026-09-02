@@ -9,7 +9,9 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from myfitness.agents.intent_agent import _extract_json, _parse_date_range, _parse_domain
+from myfitness.graph.context_reflection import needs_personalized_context
 from myfitness.debug import trace_agent
+from myfitness.graph.planner_enhance import enhance_task_plan
 from myfitness.graph.task_plan import PlannedTask, TaskPlan
 from myfitness.llm.factory import chat_completion, is_llm_configured
 from myfitness.schemas.state import Intent, RouteResult
@@ -23,6 +25,7 @@ _ANALYSIS_INTENTS = {
     Intent.DATA_QUERY,
     Intent.TREND_ANALYSIS,
     Intent.WEB_SEARCH,
+    Intent.GENERAL,
 }
 
 
@@ -39,8 +42,9 @@ def build_task_plan(
     if llm_enabled:
         llm_plan = _llm_plan(message, route, today)
         if llm_plan is not None:
-            return llm_plan
-    return _rule_plan(message, route, today, use_llm=llm_enabled)
+            return enhance_task_plan(message, llm_plan, today)
+    plan = _rule_plan(message, route, today, use_llm=llm_enabled)
+    return enhance_task_plan(message, plan, today)
 
 
 def should_use_orchestrator(
@@ -60,6 +64,8 @@ def should_use_orchestrator(
     if _is_compound_request(message):
         return True
     if route.intent in _ANALYSIS_INTENTS:
+        return True
+    if route.has(Intent.PLAN_ADJUST):
         return True
     if route.intent == Intent.GENERAL and llm_enabled:
         return True
@@ -114,7 +120,10 @@ def _build_planner_prompt(today: date) -> str:
 3. 评价/进度/趋势类任务通常 depends_on 录入任务（若同轮需先写入基准数据）。
 4. 无依赖关系的任务 depends_on 留空数组，Orchestrator 将并行执行。
 5. 数字必须绑定到正确字段：年份不是体重，「130kg」才是体重，「37%」才是体脂。
-6. 最多 {_MAX_TASKS} 个任务。
+6. 若用户要求个性化饮食/减脂/训练建议，须先增加 data_query 任务（domain=body，params 含 include_latest_body=true）检索并确认最新身体数据，再 depends_on 该任务执行分析/回答。
+7. 若用户要「今天练背/安排训练计划/根据过往记录」，须先增加 data_query（domain=fitness，params 含 include_training_history=true，date_range 近30天），再 depends_on 执行分析与计划生成；「今天」是安排目标日，训练历史必须查近30天，不能只查今天。
+8. 检索类任务与回答类任务必须拆分；回答任务 depends_on 所有检索任务。
+9. 最多 {_MAX_TASKS} 个任务。
 
 # 输出 JSON（禁止其它文字）
 {{
@@ -242,6 +251,20 @@ def _rule_plan(
             )
         )
 
+    fetch_id: str | None = None
+    if needs_personalized_context(message):
+        fetch_id = _next_id()
+        tasks.append(
+            PlannedTask(
+                id=fetch_id,
+                intent=Intent.DATA_QUERY,
+                description="检索并确认用户最新身体数据",
+                domain="body",
+                params={"scope": "confirm", "include_latest_body": True},
+                depends_on=[],
+            )
+        )
+
     analysis_intent = Intent.TREND_ANALYSIS
     if route.has(Intent.DATA_QUERY):
         analysis_intent = Intent.DATA_QUERY
@@ -256,10 +279,11 @@ def _rule_plan(
         route.has(Intent.TREND_ANALYSIS)
         or route.has(Intent.DATA_QUERY)
         or route.has(Intent.WEB_SEARCH)
-        or (route.has(Intent.GENERAL) and use_llm)
+        or (route.has(Intent.GENERAL) and (use_llm or needs_personalized_context(message)))
         or re.search(r"(评价|进度|怎么样|分析|趋势|变化)", message)
     )
     if needs_analysis and analysis_intent not in {Intent.MANUAL_ENTRY}:
+        depends = [dep for dep in (manual_id, fetch_id) if dep]
         tasks.append(
             PlannedTask(
                 id=_next_id(),
@@ -268,7 +292,7 @@ def _rule_plan(
                 domain=route.domain,
                 start_date=route.start_date,
                 end_date=route.end_date or today,
-                depends_on=[manual_id] if manual_id else [],
+                depends_on=depends,
             )
         )
 

@@ -288,7 +288,24 @@ body.hide-inspector .panel-resize-handle-left {
 .mermaid-wrap svg { display: block; width: 100%; max-width: 100%; height: auto; }
 .mermaid-fallback { color: var(--code-plain) !important; }
 .user-bubble { max-width: min(78%, 580px); background: var(--user); border: 1px solid var(--user-border); border-radius: 15px 15px 4px 15px; color: var(--user-text); padding: 10px 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
-.progress-message .message-content { color: var(--muted); display: flex; gap: 10px; align-items: center; padding-top: 5px; }
+.progress-message .message-content { color: var(--muted); padding-top: 5px; }
+.progress-current { display: flex; gap: 10px; align-items: center; }
+.turn-task-panel { margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.turn-task-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin-bottom: 8px; font-size: 11px; }
+.turn-task-head strong { color: var(--text); font-weight: 650; }
+.turn-task-requirements { color: var(--muted-2); font-size: 10px; }
+.turn-task-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.turn-task-item { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px 8px; border-radius: 8px; background: var(--surface); }
+.turn-task-copy strong { display: block; color: var(--text); font-size: 10px; font-weight: 600; }
+.turn-task-meta { display: block; margin-top: 2px; color: var(--muted-3); font-size: 9px; text-transform: lowercase; }
+.turn-task-state { color: var(--muted-2); font-size: 9px; white-space: nowrap; }
+.turn-task-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-3); }
+.turn-task-item[data-status="running"] .turn-task-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.turn-task-item[data-status="running"] .turn-task-state { color: var(--accent); }
+.turn-task-item[data-status="success"] .turn-task-dot { background: #3ecf8e; }
+.turn-task-item[data-status="success"] .turn-task-state { color: #3ecf8e; }
+.turn-task-item[data-status="failed"] .turn-task-dot { background: #ff6b6b; }
+.turn-task-item[data-status="failed"] .turn-task-state { color: #ff6b6b; }
 .typing-dots { display: flex; gap: 4px; }
 .typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s infinite; }
 .typing-dots i:nth-child(2) { animation-delay: .15s; }.typing-dots i:nth-child(3) { animation-delay: .3s; }
