@@ -17,7 +17,7 @@ const state = {
   currentSession: null,
   draft: true,
   sending: false,
-  draft: true,
+  editingMsgIndex: undefined,
   tasks: [],
   taskTypes: {},
   editingTaskId: null,
@@ -571,17 +571,27 @@ function renderConversation(session) {
   el("chatTitle").textContent = session.title || "新对话";
   const items = session.messages || [];
   welcome.classList.toggle("hidden", items.length > 0);
-  messages.innerHTML = items.map(messageHtml).join("");
+  let userIdx = 0;
+  messages.innerHTML = items.map((msg) => {
+    if (msg.role === "user") return messageHtml(msg, userIdx++);
+    return messageHtml(msg);
+  }).join("");
   bindArtifactCards();
+  bindEditButtons();
   closeArtifactView();
   syncArtifacts(items);
   hydrateMermaid(messages).then(scrollToBottom);
   requestAnimationFrame(scrollToBottom);
 }
 
-function messageHtml(message) {
+function messageHtml(message, index) {
   if (message.role === "user") {
-    return `<article class="message user"><div class="user-bubble">${escapeHtml(message.content)}</div></article>`;
+    const idx = typeof index === "number" ? ` data-msg-index="${index}"` : "";
+    return `<article class="message user"${idx}>
+      <div class="user-bubble">${escapeHtml(message.content)}<button class="edit-msg-button" aria-label="重新编辑" title="重新编辑此问题">
+        <svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      </button></div>
+    </article>`;
   }
   return `<article class="message assistant"><div class="message-avatar">${icons.agent}</div><div class="message-content">${renderMarkdown(message.content)}${artifactCardsHtml(message.artifacts)}</div></article>`;
 }
@@ -606,6 +616,128 @@ function bindArtifactCards() {
   messages.querySelectorAll("[data-artifact-path]").forEach((button) => {
     button.addEventListener("click", () => openArtifact(button.dataset.artifactPath));
   });
+}
+
+function bindEditButtons() {
+  messages.querySelectorAll(".edit-msg-button").forEach((button) => {
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const article = button.closest("[data-msg-index]");
+      if (!article) return;
+      if (article.querySelector(".inline-edit-form")) return; // 已在编辑中
+      const msgIndex = parseInt(article.dataset.msgIndex, 10);
+      const bubble = article.querySelector(".user-bubble");
+      const originalText = bubble ? bubble.childNodes[0]?.textContent?.trim() || "" : "";
+      startInlineEdit(article, msgIndex, originalText);
+    });
+  });
+}
+
+function startInlineEdit(article, msgIndex, originalText) {
+  if (state.sending) return;
+  // 隐藏气泡，插入内联编辑表单
+  const bubble = article.querySelector(".user-bubble");
+  if (bubble) bubble.style.display = "none";
+
+  const form = document.createElement("form");
+  form.className = "inline-edit-form";
+  form.innerHTML = `
+    <textarea class="inline-edit-textarea" rows="1">${escapeHtml(originalText)}</textarea>
+    <div class="inline-edit-actions">
+      <button type="button" class="inline-edit-cancel">取消</button>
+      <button type="submit" class="inline-edit-submit">重新发送</button>
+    </div>`;
+  article.appendChild(form);
+
+  const textarea = form.querySelector(".inline-edit-textarea");
+  // 自动撑高
+  function autoResize() {
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  }
+  textarea.addEventListener("input", autoResize);
+  // 填入文字后 focus 并光标移到末尾
+  textarea.value = originalText;
+  autoResize();
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+  function cancelEdit() {
+    form.remove();
+    if (bubble) bubble.style.display = "";
+  }
+
+  form.querySelector(".inline-edit-cancel").addEventListener("click", cancelEdit);
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const newText = textarea.value.trim();
+    if (!newText) return;
+    form.remove();
+    if (bubble) bubble.style.display = "";
+    await submitEditMessage(msgIndex, newText);
+  });
+
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      form.dispatchEvent(new Event("submit"));
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelEdit();
+    }
+  });
+}
+
+async function submitEditMessage(msgIndex, newText) {
+  if (state.sending) return;
+
+  // 截断 DOM：移除目标用户消息及之后的所有消息节点
+  const articles = Array.from(messages.querySelectorAll("[data-msg-index]"));
+  const targetArticle = articles.find((a) => parseInt(a.dataset.msgIndex, 10) === msgIndex);
+  if (targetArticle) {
+    let node = targetArticle;
+    while (node) {
+      const next = node.nextSibling;
+      messages.removeChild(node);
+      node = next;
+    }
+  }
+  // 插入新的用户消息气泡
+  messages.insertAdjacentHTML("beforeend", messageHtml({ role: "user", content: newText }));
+  welcome.classList.add("hidden");
+  showProgress();
+  setSendingState(true);
+  try {
+    const result = await readEditStream(msgIndex, newText);
+    renderConversation(result);
+    await refreshSessions();
+  } catch (error) {
+    el("progressMessage")?.remove();
+    el("streamingMessage")?.remove();
+    if (error.message !== "用户已打断") {
+      messages.insertAdjacentHTML("beforeend", `<article class="message assistant"><div class="message-avatar">!</div><div class="message-content"><p>处理失败：${escapeHtml(error.message)}</p></div></article>`);
+      showToast(error.message);
+    }
+  } finally {
+    setSendingState(false);
+    input.focus();
+    scrollToBottom();
+  }
+}
+
+async function abortCurrentStream() {
+  if (!state.activeId || !state.sending) return;
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(state.activeId)}/abort`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+  } catch (e) {
+    logger && logger.warn ? logger.warn(e) : null;
+  }
 }
 
 function syncArtifacts(items) {
@@ -1450,6 +1582,24 @@ function ensureAssistantStream() {
   return el("streamingMessage").querySelector(".message-content");
 }
 
+async function readEditStream(msgIndex, text) {
+  if (!state.activeId) throw new Error("没有活动会话");
+  const response = await fetch(`/api/sessions/${encodeURIComponent(state.activeId)}/edit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message_index: msgIndex, message: text }),
+  });
+  const contentType = response.headers.get("content-type") || "";
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `请求失败 (${response.status})`);
+  }
+  if (!contentType.includes("text/event-stream") || !response.body) {
+    throw new Error("服务器未返回流式响应");
+  }
+  return _consumeStream(response.body);
+}
+
 async function readSessionStream(text) {
   const response = await fetch("/api/sessions/stream", {
     method: "POST",
@@ -1468,7 +1618,11 @@ async function readSessionStream(text) {
     throw new Error("服务器未返回流式响应");
   }
 
-  const reader = response.body.getReader();
+  return _consumeStream(response.body);
+}
+
+async function _consumeStream(body) {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let typewriter = null;
@@ -1504,6 +1658,11 @@ async function readSessionStream(text) {
       finalPayload = data;
       return;
     }
+    if (event === "aborted") {
+      // 服务端打断：结束流，视为正常（后续 finalPayload 为 null 则会静默）
+      streamError = new Error("用户已打断");
+      return;
+    }
     if (event === "error") {
       streamError = new Error(data.error || "流式输出失败");
     }
@@ -1526,20 +1685,32 @@ async function readSessionStream(text) {
       await handleEvent(item.event, item.data || {});
     }
   }
-  if (streamError) throw streamError;
   if (typewriter) await typewriter.finish();
+  if (streamError) throw streamError;
   if (!finalPayload) throw new Error("会话中断，未收到完整回复");
   return finalPayload;
+}
+
+function setSendingState(sending) {
+  state.sending = sending;
+  sendButton.disabled = sending;
+  const stopBtn = el("stopButton");
+  if (sending) {
+    stopBtn.classList.remove("hidden");
+  } else {
+    stopBtn.classList.add("hidden");
+  }
 }
 
 async function sendMessage() {
   const text = input.value.trim();
   if (!text || state.sending) return;
-  state.sending = true;
-  sendButton.disabled = true;
+
+  setSendingState(true);
   input.value = "";
   resizeInput();
   welcome.classList.add("hidden");
+
   messages.insertAdjacentHTML("beforeend", messageHtml({ role: "user", content: text }));
   showProgress();
   try {
@@ -1549,12 +1720,13 @@ async function sendMessage() {
   } catch (error) {
     el("progressMessage")?.remove();
     el("streamingMessage")?.remove();
-    messages.insertAdjacentHTML("beforeend", `<article class="message assistant"><div class="message-avatar">!</div><div class="message-content"><p>处理失败：${escapeHtml(error.message)}</p></div></article>`);
-    showToast(error.message);
-    if (state.draft) state.activeId = null;
+    if (error.message !== "用户已打断") {
+      messages.insertAdjacentHTML("beforeend", `<article class="message assistant"><div class="message-avatar">!</div><div class="message-content"><p>处理失败：${escapeHtml(error.message)}</p></div></article>`);
+      showToast(error.message);
+      if (state.draft) state.activeId = null;
+    }
   } finally {
-    state.sending = false;
-    sendButton.disabled = false;
+    setSendingState(false);
     input.focus();
     scrollToBottom();
   }
@@ -1591,6 +1763,12 @@ function bindEvents() {
   el("newChatButton").addEventListener("click", newSession);
   el("sessionFilter").addEventListener("input", renderSessionList);
   sendButton.addEventListener("click", sendMessage);
+  el("stopButton").addEventListener("click", async () => {
+    if (!state.sending) return;
+    el("stopButton").disabled = true;
+    await abortCurrentStream();
+    el("stopButton").disabled = false;
+  });
   input.addEventListener("input", resizeInput);
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(); }

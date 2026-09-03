@@ -124,6 +124,9 @@ class AgentWebApplication:
         self.history = ChatHistoryStore(history_dir)
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+        # session_id -> threading.Event，set() 表示请求打断
+        self._abort_events: dict[str, threading.Event] = {}
+        self._abort_guard = threading.Lock()
 
     def list_sessions(self) -> dict[str, Any]:
         return {"sessions": [item.as_dict() for item in self.history.list_sessions()]}
@@ -219,6 +222,68 @@ class AgentWebApplication:
             "scheduler_error": scheduler_error,
         }
 
+    # ------------------------------------------------------------------- 打断 / 编辑
+
+    def _abort_event_for(self, session_id: str) -> threading.Event:
+        canonical = self.history.normalize_session_id(session_id)
+        with self._abort_guard:
+            if canonical not in self._abort_events:
+                self._abort_events[canonical] = threading.Event()
+            return self._abort_events[canonical]
+
+    def abort_stream(self, session_id: str) -> dict[str, Any]:
+        """发送打断信号；正在运行的 stream_message 会在下一次 progress 检查时中止。"""
+        canonical = self.history.normalize_session_id(session_id)
+        evt = self._abort_event_for(canonical)
+        evt.set()
+        return {"aborted": True, "session_id": canonical}
+
+    def edit_message(
+        self,
+        session_id: str,
+        message_index: int,
+        new_text: str,
+        emit: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """将指定索引的用户消息改写并重新执行（截断后续消息，清除图状态）。"""
+        from myfitness.graph.langgraph_flow import clear_graph_state
+
+        text = self._validated_message(new_text)
+        canonical = self.history.normalize_session_id(session_id)
+        # 清除进行中的流
+        evt = self._abort_event_for(canonical)
+        evt.set()
+
+        lock = self._lock_for(canonical)
+        with lock:
+            # 重置打断 Event，供本轮使用
+            with self._abort_guard:
+                self._abort_events[canonical] = threading.Event()
+
+            state = self.history.load(canonical)
+            # 截断到指定用户消息之前（保留 0..message_index-1）
+            from myfitness.schemas.state import ChatMessage
+            messages = list(state.messages or [])
+            # message_index 是前端给的用户消息序号（0-based，只计 user 消息）
+            user_count = 0
+            cut_pos = 0
+            for i, msg in enumerate(messages):
+                if getattr(msg, "role", None) == "user" or (
+                    isinstance(msg, dict) and msg.get("role") == "user"
+                ):
+                    if user_count == message_index:
+                        cut_pos = i
+                        break
+                    user_count += 1
+            state.messages = messages[:cut_pos]
+            state.reply = ""
+            state.errors = []
+            # 清除该 session 的图状态
+            clear_graph_state(canonical)
+            self.history.save(state)
+            # 重新执行
+            return self.stream_message(canonical, text, emit=emit)
+
     def send_message(self, session_id: str, message: str) -> dict[str, Any]:
         text = self._validated_message(message)
         lock = self._lock_for(session_id)
@@ -258,6 +323,9 @@ class AgentWebApplication:
             if emit is not None:
                 emit(event, payload)
 
+        abort_evt = self._abort_event_for(canonical)
+        abort_evt.clear()
+
         lock = self._lock_for(canonical)
         with lock:
             if not created:
@@ -266,6 +334,8 @@ class AgentWebApplication:
             progress: list[str] = []
 
             def on_progress(msg) -> None:
+                if abort_evt.is_set():
+                    raise InterruptedError("用户已打断")
                 progress.append(msg)
                 if isinstance(msg, dict):
                     event = str(msg.get("type") or "progress")
@@ -273,25 +343,41 @@ class AgentWebApplication:
                 else:
                     emit_event("progress", {"text": msg})
 
-            with session_scope() as session:
-                get_or_create_default_user(session, state.user_id)
-                state, chunks = iter_chat_turn(
-                    session, state, text, on_progress=on_progress
-                )
-                # 首轮用户消息已经写入 state，此时才落盘并出现在侧栏。
-                self.history.save(state)
-                emit_event("session", self.session_payload(state.session_id))
-                reply_parts: list[str] = []
-                for chunk in chunks:
-                    if not chunk:
-                        continue
-                    reply_parts.append(chunk)
-                    emit_event("delta", {"text": chunk})
-                finalize_streamed_reply(state, "".join(reply_parts), session=session)
+            aborted = False
+            try:
+                with session_scope() as session:
+                    get_or_create_default_user(session, state.user_id)
+                    state, chunks = iter_chat_turn(
+                        session, state, text, on_progress=on_progress
+                    )
+                    # 首轮用户消息已经写入 state，此时才落盘并出现在侧栏。
+                    self.history.save(state)
+                    emit_event("session", self.session_payload(state.session_id))
+                    reply_parts: list[str] = []
+                    for chunk in chunks:
+                        if abort_evt.is_set():
+                            aborted = True
+                            break
+                        if not chunk:
+                            continue
+                        reply_parts.append(chunk)
+                        emit_event("delta", {"text": chunk})
+                    if not aborted:
+                        finalize_streamed_reply(state, "".join(reply_parts), session=session)
+                    else:
+                        # 保存已有部分回复
+                        partial = "".join(reply_parts)
+                        if partial:
+                            finalize_streamed_reply(state, partial + "\n\n*(已中断)*", session=session)
+            except InterruptedError:
+                aborted = True
             self.history.save(state)
             payload = self.session_payload(state.session_id)
             payload.update({"reply": state.reply, "progress": progress})
-            emit_event("done", payload)
+            if aborted:
+                emit_event("aborted", {"session_id": canonical})
+            else:
+                emit_event("done", payload)
             return payload
 
     @staticmethod
@@ -533,6 +619,19 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
                 session_id = str(body.get("session_id") or "").strip() or None
                 self._stream_message(session_id, body.get("message", ""))
                 return
+            if parsed.path.startswith("/api/sessions/") and parsed.path.endswith("/abort"):
+                session_id = unquote(
+                    parsed.path.removeprefix("/api/sessions/").removesuffix("/abort")
+                ).strip("/")
+                self._json(self.server.app.abort_stream(session_id))
+                return
+            if parsed.path.startswith("/api/sessions/") and parsed.path.endswith("/edit"):
+                session_id = unquote(
+                    parsed.path.removeprefix("/api/sessions/").removesuffix("/edit")
+                ).strip("/")
+                body = self._read_json()
+                self._stream_edit(session_id, int(body.get("message_index", 0)), body.get("message", ""))
+                return
             if parsed.path == "/api/sessions":
                 self._json(self.server.app.create_session(), status=HTTPStatus.CREATED)
                 return
@@ -663,6 +762,33 @@ class AgentUiRequestHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(data)
+
+    def _stream_edit(self, session_id: str, message_index: int, message: str) -> None:
+        try:
+            self.server.app._validated_message(message)
+        except Exception as exc:
+            self._handle_error(exc)
+            return
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            self.server.app.edit_message(session_id, message_index, message, emit=self._write_sse)
+        except Exception as exc:
+            logger.exception("Agent UI edit stream failed")
+            error = str(exc) if isinstance(
+                exc, (ChatHistoryError, ArtifactError, ValueError)
+            ) else "请求处理失败，请查看服务端日志"
+            try:
+                self._write_sse("error", {"error": error})
+            except Exception:
+                logger.debug("无法写入 SSE 错误事件", exc_info=True)
 
     def _stream_message(self, session_id: str | None, message: str) -> None:
         try:

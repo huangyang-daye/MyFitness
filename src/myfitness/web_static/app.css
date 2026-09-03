@@ -287,7 +287,21 @@ body.hide-inspector .panel-resize-handle-left {
 .mermaid-wrap .mermaid[data-processed] { color: inherit; white-space: normal; }
 .mermaid-wrap svg { display: block; width: 100%; max-width: 100%; height: auto; }
 .mermaid-fallback { color: var(--code-plain) !important; }
-.user-bubble { max-width: min(78%, 580px); background: var(--user); border: 1px solid var(--user-border); border-radius: 15px 15px 4px 15px; color: var(--user-text); padding: 10px 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.user-bubble { position: relative; max-width: min(78%, 580px); background: var(--user); border: 1px solid var(--user-border); border-radius: 15px 15px 4px 15px; color: var(--user-text); padding: 10px 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.edit-msg-button { position: absolute; bottom: 6px; right: -34px; width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; display: grid; place-items: center; opacity: 0; transition: opacity .15s, background .15s; padding: 0; }
+.message.user:hover .edit-msg-button { opacity: 1; }
+.edit-msg-button:hover { background: var(--hover-2); border-color: var(--border-hover); color: var(--text-2); }
+.edit-msg-button svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+/* 内联编辑表单 */
+.inline-edit-form { display: flex; flex-direction: column; gap: 8px; max-width: min(78%, 580px); width: 100%; }
+.inline-edit-textarea { width: 100%; box-sizing: border-box; background: var(--input); border: 1px solid var(--border-hover); border-radius: 12px; color: var(--text); font-size: 13px; line-height: 1.6; padding: 10px 14px; resize: none; outline: none; font-family: inherit; transition: border-color .15s; }
+.inline-edit-textarea:focus { border-color: var(--accent-dark); }
+.inline-edit-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.inline-edit-cancel { padding: 5px 14px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; transition: background .15s, color .15s; }
+.inline-edit-cancel:hover { background: var(--hover-2); color: var(--text-2); }
+.inline-edit-submit { padding: 5px 14px; border-radius: 8px; border: 0; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 600; cursor: pointer; transition: background .15s; }
+.inline-edit-submit:hover { background: var(--accent-hover); }
 .progress-message .message-content { color: var(--muted); padding-top: 5px; }
 .progress-current { display: flex; gap: 10px; align-items: center; }
 .turn-task-panel { margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
@@ -352,6 +366,11 @@ body.hide-inspector .panel-resize-handle-left {
 .send-button:hover { background: var(--accent-hover); }
 .send-button:disabled { cursor: not-allowed; opacity: .35; }
 .send-button svg { width: 17px; stroke-width: 2.2; }
+.stop-button { margin-left: 4px; width: 30px; height: 30px; flex: 0 0 30px; border-radius: 9px; border: 1px solid var(--border-hover); background: var(--surface-2); color: var(--danger); cursor: pointer; display: grid; place-items: center; animation: stop-pulse 1.2s ease-in-out infinite; }
+.stop-button:hover { background: var(--hover-2); border-color: var(--danger); }
+.stop-button:disabled { opacity: .4; cursor: not-allowed; }
+.stop-button svg { width: 16px; fill: currentColor; stroke: none; }
+@keyframes stop-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
 .disclaimer { margin: 8px auto 0; color: var(--muted-3); text-align: center; font-size: 9px; }
 
 /* ------------------------------------------------------------ 右栏：产物 */
