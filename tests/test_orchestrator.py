@@ -218,9 +218,9 @@ def test_run_analysis_graph_judge_retry_reenters_execute(db_session):
     )
     calls = {"execute": 0, "judge": 0}
 
-    def counting_execute(state_in, config=None):
+    def counting_execute(state_in, runtime=None):
         calls["execute"] += 1
-        return flow.execute_ready_node(state_in, config)
+        return flow.execute_ready_node(state_in, runtime)
 
     def judge_side_effect(*_args, **_kwargs):
         calls["judge"] += 1
@@ -242,7 +242,7 @@ def test_run_analysis_graph_judge_retry_reenters_execute(db_session):
         ),
         patch("myfitness.graph.langgraph_flow.should_stream_summary", return_value=False),
     ):
-        graph = StateGraph(AnalysisGraphState)
+        graph = StateGraph(AnalysisGraphState, context_schema=flow.AnalysisContext)
         graph.add_node("plan", flow.plan_node)
         graph.add_node("execute_ready", counting_execute)
         graph.add_node("reflect", flow.reflect_node)

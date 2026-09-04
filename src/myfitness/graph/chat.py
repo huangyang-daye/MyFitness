@@ -960,7 +960,7 @@ def _is_expired(pending: PendingConfirmation) -> bool:
 def build_langgraph_app(session: Session):
     """返回分析子图（plan → execute_ready → reflect → judge → summary）。
 
-    session 参数保留以兼容旧签名；运行时 Session 经 invoke config 注入。
+    session 参数保留以兼容旧签名；运行时 Session 经 invoke context 注入。
     """
     from myfitness.graph.langgraph_flow import build_analysis_graph
 

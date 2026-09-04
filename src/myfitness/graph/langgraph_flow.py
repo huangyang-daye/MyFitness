@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal, TypedDict
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,9 @@ from myfitness.graph.progress import ProgressCallback, emit_plan, emit_step, lab
 from myfitness.graph.task_plan import ExecutionResult, JudgeVerdict, TaskPlan
 from myfitness.memory.types import MemoryBundle
 from myfitness.schemas.state import Intent, MyFitnessGraphState, RouteResult
+
+if TYPE_CHECKING:
+    from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,7 @@ def get_checkpointer():
 
 
 class AnalysisGraphState(TypedDict, total=False):
-    """可序列化的控制流状态；Session / progress / execution 经 configurable 注入。"""
+    """可序列化的控制流状态；Session / progress / execution 经 Runtime.context 注入。"""
 
     task_plan: dict[str, Any]
     judge_attempt: int
@@ -53,25 +57,45 @@ class AnalysisGraphState(TypedDict, total=False):
     reflection_retry_ids: list[str]
 
 
-def _runtime(config: dict[str, Any] | None) -> dict[str, Any]:
-    if not config:
-        raise RuntimeError("Analysis graph requires config['configurable'] runtime")
-    configurable = config.get("configurable") or {}
-    runtime = configurable.get("runtime")
-    if not isinstance(runtime, dict):
-        raise RuntimeError("config.configurable.runtime is required")
-    return runtime
+@dataclass
+class AnalysisContext:
+    """单次 invoke 的运行时依赖，不进入 checkpointer。"""
+
+    session: Session
+    chat_state: MyFitnessGraphState
+    route: RouteResult
+    memory_bundle: MemoryBundle
+    on_progress: ProgressCallback | None = None
+    execution: ExecutionResult = field(default_factory=ExecutionResult)
 
 
-def _progress(runtime: dict[str, Any]) -> ProgressCallback | None:
-    return runtime.get("on_progress")
+def _ctx(runtime: Runtime[AnalysisContext] | None) -> AnalysisContext:
+    """从 LangGraph Runtime 取出分析上下文。
+
+    LangGraph ≥0.6 只向参数名 `runtime`（或类型为 RunnableConfig 的 `config`）注入；
+    自定义 `config: dict` 不会收到配置。
+    """
+    context = getattr(runtime, "context", None)
+    if isinstance(context, AnalysisContext):
+        return context
+    try:
+        from langgraph.runtime import get_runtime
+
+        context = get_runtime(AnalysisContext).context
+    except Exception:
+        context = None
+    if isinstance(context, AnalysisContext):
+        return context
+    raise RuntimeError("Analysis graph requires Runtime.context (AnalysisContext)")
 
 
-def plan_node(state: AnalysisGraphState, config: dict[str, Any] | None = None) -> dict[str, Any]:
-    runtime = _runtime(config)
-    chat_state: MyFitnessGraphState = runtime["chat_state"]
-    route: RouteResult = runtime["route"]
-    on_progress = _progress(runtime)
+def plan_node(
+    state: AnalysisGraphState, runtime: Runtime[AnalysisContext] | None = None
+) -> dict[str, Any]:
+    ctx = _ctx(runtime)
+    chat_state = ctx.chat_state
+    route = ctx.route
+    on_progress = ctx.on_progress
     use_llm = state.get("use_llm")
 
     if state.get("skip_plan") and state.get("task_plan"):
@@ -97,14 +121,14 @@ def plan_node(state: AnalysisGraphState, config: dict[str, Any] | None = None) -
 
 
 def execute_ready_node(
-    state: AnalysisGraphState, config: dict[str, Any] | None = None
+    state: AnalysisGraphState, runtime: Runtime[AnalysisContext] | None = None
 ) -> dict[str, Any]:
-    runtime = _runtime(config)
-    chat_state: MyFitnessGraphState = runtime["chat_state"]
-    route: RouteResult = runtime["route"]
-    memory_bundle: MemoryBundle = runtime["memory_bundle"]
-    session: Session = runtime["session"]
-    on_progress = _progress(runtime)
+    ctx = _ctx(runtime)
+    chat_state = ctx.chat_state
+    route = ctx.route
+    memory_bundle = ctx.memory_bundle
+    session = ctx.session
+    on_progress = ctx.on_progress
 
     attempt = int(state.get("judge_attempt") or 0) + 1
     emit_step(on_progress, f"{label_for('planner')}（第 {attempt} 轮）…")
@@ -120,7 +144,7 @@ def execute_ready_node(
         on_progress=on_progress,
         retry_task_ids=retry_ids,
     )
-    runtime["execution"] = execution
+    ctx.execution = execution
     return {
         "judge_attempt": attempt,
         "needs_confirmation": bool(execution.needs_confirmation),
@@ -128,11 +152,13 @@ def execute_ready_node(
     }
 
 
-def reflect_node(state: AnalysisGraphState, config: dict[str, Any] | None = None) -> dict[str, Any]:
-    runtime = _runtime(config)
-    chat_state: MyFitnessGraphState = runtime["chat_state"]
-    execution: ExecutionResult = runtime["execution"]
-    on_progress = _progress(runtime)
+def reflect_node(
+    state: AnalysisGraphState, runtime: Runtime[AnalysisContext] | None = None
+) -> dict[str, Any]:
+    ctx = _ctx(runtime)
+    chat_state = ctx.chat_state
+    execution = ctx.execution
+    on_progress = ctx.on_progress
     use_llm = state.get("use_llm")
     fetch_task_ids = list(state.get("fetch_task_ids") or [])
 
@@ -157,11 +183,13 @@ def reflect_node(state: AnalysisGraphState, config: dict[str, Any] | None = None
     }
 
 
-def judge_node(state: AnalysisGraphState, config: dict[str, Any] | None = None) -> dict[str, Any]:
-    runtime = _runtime(config)
-    chat_state: MyFitnessGraphState = runtime["chat_state"]
-    execution: ExecutionResult = runtime["execution"]
-    on_progress = _progress(runtime)
+def judge_node(
+    state: AnalysisGraphState, runtime: Runtime[AnalysisContext] | None = None
+) -> dict[str, Any]:
+    ctx = _ctx(runtime)
+    chat_state = ctx.chat_state
+    execution = ctx.execution
+    on_progress = ctx.on_progress
     use_llm = state.get("use_llm")
     task_plan = TaskPlan.from_dict(state["task_plan"])
     attempt = int(state.get("judge_attempt") or 1)
@@ -202,11 +230,13 @@ def judge_node(state: AnalysisGraphState, config: dict[str, Any] | None = None) 
     }
 
 
-def summary_node(state: AnalysisGraphState, config: dict[str, Any] | None = None) -> dict[str, Any]:
-    runtime = _runtime(config)
-    chat_state: MyFitnessGraphState = runtime["chat_state"]
-    execution: ExecutionResult = runtime["execution"]
-    on_progress = _progress(runtime)
+def summary_node(
+    state: AnalysisGraphState, runtime: Runtime[AnalysisContext] | None = None
+) -> dict[str, Any]:
+    ctx = _ctx(runtime)
+    chat_state = ctx.chat_state
+    execution = ctx.execution
+    on_progress = ctx.on_progress
     task_plan = TaskPlan.from_dict(state["task_plan"])
     use_llm = state.get("use_llm")
 
@@ -257,7 +287,7 @@ def build_analysis_graph():
     except ImportError as exc:
         raise ImportError('pip install -e ".[agents]"') from exc
 
-    graph = StateGraph(AnalysisGraphState)
+    graph = StateGraph(AnalysisGraphState, context_schema=AnalysisContext)
     graph.add_node("plan", plan_node)
     graph.add_node("execute_ready", execute_ready_node)
     graph.add_node("reflect", reflect_node)
@@ -331,14 +361,13 @@ def run_analysis_graph(
     thread_id 用于 checkpointer 持久化，默认取 state.session_id。
     """
     effective_thread_id = thread_id or state.session_id or "default"
-    runtime: dict[str, Any] = {
-        "session": session,
-        "chat_state": state,
-        "route": route,
-        "memory_bundle": memory_bundle,
-        "on_progress": on_progress,
-        "execution": ExecutionResult(),
-    }
+    ctx = AnalysisContext(
+        session=session,
+        chat_state=state,
+        route=route,
+        memory_bundle=memory_bundle,
+        on_progress=on_progress,
+    )
     initial: AnalysisGraphState = {
         "use_llm": use_llm,
         "skip_plan": plan is not None,
@@ -360,12 +389,11 @@ def run_analysis_graph(
     graph = get_analysis_graph()
     config: dict[str, Any] = {
         "configurable": {
-            "runtime": runtime,
             "thread_id": effective_thread_id,
         }
     }
-    final_state = graph.invoke(initial, config=config)
-    execution: ExecutionResult = runtime.get("execution") or ExecutionResult()
+    final_state = graph.invoke(initial, config=config, context=ctx)
+    execution = ctx.execution
     stream = bool(final_state.get("stream_summary"))
     if execution.needs_confirmation:
         return execution, False
