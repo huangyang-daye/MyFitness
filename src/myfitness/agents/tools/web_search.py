@@ -1,7 +1,8 @@
 """联网检索 Tool — 对话时检索中国互联网公开资料。
 
 优先国内搜索 API（博查 Bocha、智谱 GLM Web Search），未配置密钥时回退到
-DuckDuckGo HTML / 必应中国版页面解析，无需额外依赖。
+DuckDuckGo HTML / 必应中国版页面解析。若安装了 cn-scraper-mcp 或配置了
+远程 MCP，还会按话里点名的平台（小红书、知乎、B 站等）补充站内搜索。
 """
 
 from __future__ import annotations
@@ -15,6 +16,13 @@ from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 import httpx
 from langchain_core.tools import tool
 
+from myfitness.agents.tools.cn_platform_search import (
+    cn_scraper_available,
+    is_platform_search_request,
+    resolve_platforms,
+    search_cn_platforms,
+    strip_platform_mentions,
+)
 from myfitness.config import get_settings
 from myfitness.schemas.state import Intent
 
@@ -130,8 +138,8 @@ def is_personal_data_query(message: str) -> bool:
 
 
 def is_web_search_request(message: str) -> bool:
-    """关键词层：显式搜网，或公开知识问（且不是查自己某天的数据）。"""
-    if is_explicit_search(message):
+    """关键词层：显式搜网、点名中文平台，或公开知识问（且不是查自己某天的数据）。"""
+    if is_explicit_search(message) or is_platform_search_request(message):
         return True
     if is_personal_data_query(message):
         return False
@@ -144,28 +152,32 @@ def needs_web_search(message: str, intent: Intent | None) -> bool:
         return False
     if intent in _SKIP_INTENTS:
         return False
-    if is_explicit_search(message) or intent == Intent.WEB_SEARCH:
+    if is_explicit_search(message) or is_platform_search_request(message) or intent == Intent.WEB_SEARCH:
         return True
-    if is_knowledge_question(message):
-        return True
-    return False
+    return bool(is_knowledge_question(message))
 
 
 def build_search_query(message: str) -> str:
-    text = message.strip()
+    raw = message.strip()
+    stripped = strip_platform_mentions(raw)
+    text = stripped
     for prefix in _SEARCH_PREFIXES:
         if text.startswith(prefix):
             text = text[len(prefix) :].lstrip("：:，, ")
             break
-    return text or message.strip()
+    if stripped != raw:
+        text = re.sub(r"^(?:搜|搜索|查|找)\s*", "", text).strip("：:，, ")
+    return text or stripped or raw
 
 
 def format_web_search_results(results: list[dict[str, Any]]) -> str:
     if not results:
         return ""
     lines = [
-        "【联网检索结果 — 综合以下公开网页回答知识性问题，关键结论后标注 [n]；"
-        "与用户本地数据冲突时以数据库为准。文末列出参考资料（标题 + 链接）】"
+        (
+            "【联网检索结果 — 综合以下公开网页回答知识性问题，关键结论后标注 [n]；"
+            "与用户本地数据冲突时以数据库为准。文末列出参考资料（标题 + 链接）】"
+        )
     ]
     for index, item in enumerate(results, start=1):
         title = str(item.get("title") or "未命名").strip()
@@ -193,15 +205,18 @@ def search_web(
 ) -> dict[str, Any]:
     """执行网页搜索并返回规范化结果。失败时 results 为空并带 error。"""
     settings = get_settings()
-    query = query.strip()
-    if not query:
-        return _payload(query, [], provider=None, error="empty_query")
+    original = query.strip()
+    if not original:
+        return _payload(original, [], provider=None, error="empty_query")
     if not settings.web_search_enabled:
-        return _payload(query, [], provider=None, error="disabled")
+        return _payload(original, [], provider=None, error="disabled")
 
+    query = build_search_query(original) or original
     limit = count or settings.web_search_count
     freshness = freshness or settings.web_search_freshness
     last_error: str | None = None
+    web_hits: list[dict[str, Any]] = []
+    web_provider: str | None = None
 
     for provider in _provider_chain(settings):
         try:
@@ -211,10 +226,41 @@ def search_web(
             logger.warning("web_search provider %s failed: %s", provider, exc)
             continue
         if hits:
-            return _payload(query, hits[:limit], provider=provider, error=None)
+            web_hits = hits[:limit]
+            web_provider = provider
+            break
         last_error = last_error or "no_results"
 
-    return _payload(query, [], provider=_resolve_provider(settings), error=last_error)
+    platforms, explicit = resolve_platforms(original, settings)
+    platform_hits: list[dict[str, Any]] = []
+    if platforms and cn_scraper_available(settings):
+        try:
+            platform_hits = search_cn_platforms(
+                query, platforms, count=limit, settings=settings
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("cn platform search failed: %s", exc)
+
+    merged = _merge_hits(web_hits, platform_hits, limit, prefer_platform=explicit)
+    if merged:
+        provider = web_provider or "cn_scraper"
+        payload = _payload(query, merged, provider=provider, error=None)
+        sources = []
+        if web_provider:
+            sources.append(web_provider)
+        sources.extend(
+            sorted(
+                {
+                    str(item.get("platform") or item.get("site") or "")
+                    for item in platform_hits
+                    if item.get("platform") or item.get("site")
+                }
+            )
+        )
+        payload["sources"] = [name for name in sources if name]
+        return payload
+
+    return _payload(query, [], provider=web_provider or _resolve_provider(settings), error=last_error)
 
 
 @tool
@@ -225,12 +271,43 @@ def web_search(
 ) -> dict:
     """在中国互联网上搜索公开资料（健身、营养、训练研究等）。
 
+    若用户点名小红书、知乎、B 站、微博、淘宝、京东、豆瓣、大众点评或抖音，
+    会同时检索对应平台（需安装 cn-scraper-mcp 或配置 CN_SCRAPER_MCP_URL）。
+
     Args:
         query: 搜索关键词或完整问题。
         count: 返回条数，默认使用配置 WEB_SEARCH_COUNT。
         freshness: 时效 noLimit / oneDay / oneWeek / oneMonth / oneYear。
     """
     return search_web(query, count=count, freshness=freshness)
+
+
+def _merge_hits(
+    web_hits: list[dict[str, Any]],
+    platform_hits: list[dict[str, Any]],
+    limit: int,
+    *,
+    prefer_platform: bool,
+) -> list[dict[str, Any]]:
+    if not platform_hits:
+        return web_hits[:limit]
+    if not web_hits:
+        return platform_hits[:limit]
+    if prefer_platform:
+        cap = min(len(platform_hits), limit)
+    else:
+        cap = min(len(platform_hits), max(3, limit // 2))
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for hit in platform_hits[:cap] + web_hits:
+        url = str(hit.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        merged.append(hit)
+        if len(merged) >= limit:
+            break
+    return merged
 
 
 def _payload(

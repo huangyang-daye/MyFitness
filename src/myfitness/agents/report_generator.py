@@ -202,6 +202,6 @@ def _format_report_retrieval(context: ContextSnapshot) -> str:
             )
         )
     return (
-        "【语义检索结果 — 可参考以下历史片段，与数据库明细冲突时以数据库为准】\n"
+        "【检索结果（向量+关键词）— 可参考以下历史片段，与数据库明细冲突时以数据库为准】\n"
         + format_retrieved_chunks(chunks)
     )

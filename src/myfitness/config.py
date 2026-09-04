@@ -73,10 +73,12 @@ class Settings(BaseSettings):
     sync_default_days: int = 90
     xunji_cache_ttl_seconds: int = 300
 
-    # RAG — pgvector 语义检索
+    # RAG — 向量 KNN + BM25 双路召回，RRF 融合后 BM25 精排
     rag_enabled: bool = True
     rag_top_k: int = 5
-    rag_min_similarity: float = 0.35
+    rag_recall_k: int = 20
+    rag_rrf_k: int = 60
+    rag_min_similarity: float = 0.35  # 精排后 minScore（归一化到 0~1）
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
     embedding_base_url: str = ""
@@ -98,12 +100,32 @@ class Settings(BaseSettings):
     web_search_count: int = 8
     web_search_timeout: int = 15
     web_search_freshness: str = "noLimit"
+    # 中文平台搜索（cn-scraper-mcp）：小红书 / 知乎 / B 站 / 微博 / 淘宝 / 京东等
+    cn_scraper_enabled: bool = True
+    cn_scraper_mcp_url: str = ""  # 例如 http://127.0.0.1:8000/mcp；留空则走本机 Python 包
+    cn_scraper_platforms: str = "auto"  # auto | none | 逗号分隔平台名
+    cn_scraper_default_platforms: str = "bilibili"  # auto 且未点名平台时补充检索
+    cn_scraper_timeout: int = 25
 
     @field_validator("rag_top_k")
     @classmethod
     def validate_rag_top_k(cls, value: int) -> int:
         if value < 1 or value > 50:
             raise ValueError("RAG_TOP_K 须在 1 ~ 50 之间")
+        return value
+
+    @field_validator("rag_recall_k")
+    @classmethod
+    def validate_rag_recall_k(cls, value: int) -> int:
+        if value < 1 or value > 100:
+            raise ValueError("RAG_RECALL_K 须在 1 ~ 100 之间")
+        return value
+
+    @field_validator("rag_rrf_k")
+    @classmethod
+    def validate_rag_rrf_k(cls, value: int) -> int:
+        if value < 1 or value > 200:
+            raise ValueError("RAG_RRF_K 须在 1 ~ 200 之间")
         return value
 
     @field_validator("rag_min_similarity")
@@ -149,6 +171,13 @@ class Settings(BaseSettings):
         if normalized not in allowed:
             raise ValueError("WEB_SEARCH_PROVIDER 须为 auto / bocha / zhipu / duckduckgo / bing")
         return normalized
+
+    @field_validator("cn_scraper_timeout")
+    @classmethod
+    def validate_cn_scraper_timeout(cls, value: int) -> int:
+        if value < 5 or value > 90:
+            raise ValueError("CN_SCRAPER_TIMEOUT 须在 5 ~ 90 之间")
+        return value
 
     @field_validator("web_search_count")
     @classmethod

@@ -1,0 +1,1058 @@
+[
+  {
+    "id": "rag-001",
+    "query": "8月1日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-01"
+    ]
+  },
+  {
+    "id": "rag-002",
+    "query": "8月3日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-03"
+    ]
+  },
+  {
+    "id": "rag-003",
+    "query": "8月5日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-05"
+    ]
+  },
+  {
+    "id": "rag-004",
+    "query": "8月7日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-07"
+    ]
+  },
+  {
+    "id": "rag-005",
+    "query": "8月9日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-09"
+    ]
+  },
+  {
+    "id": "rag-006",
+    "query": "8月11日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-11"
+    ]
+  },
+  {
+    "id": "rag-007",
+    "query": "8月12日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-12"
+    ]
+  },
+  {
+    "id": "rag-008",
+    "query": "8月13日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-13"
+    ]
+  },
+  {
+    "id": "rag-009",
+    "query": "8月14日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-14"
+    ]
+  },
+  {
+    "id": "rag-010",
+    "query": "8月15日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-15"
+    ]
+  },
+  {
+    "id": "rag-011",
+    "query": "8月16日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-16"
+    ]
+  },
+  {
+    "id": "rag-012",
+    "query": "8月17日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-17"
+    ]
+  },
+  {
+    "id": "rag-013",
+    "query": "8月19日体重多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-19"
+    ]
+  },
+  {
+    "id": "rag-014",
+    "query": "8月5日体脂率",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-05"
+    ]
+  },
+  {
+    "id": "rag-015",
+    "query": "8月10日体脂率",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-10"
+    ]
+  },
+  {
+    "id": "rag-016",
+    "query": "8月15日体脂率",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-15"
+    ]
+  },
+  {
+    "id": "rag-017",
+    "query": "8月20日体脂率",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-20"
+    ]
+  },
+  {
+    "id": "rag-018",
+    "query": "8月20日体重记录",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-20"
+    ]
+  },
+  {
+    "id": "rag-019",
+    "query": "8月1日与8月20日体重变化",
+    "domain": "body",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01",
+      "2026-08-20"
+    ]
+  },
+  {
+    "id": "rag-020",
+    "query": "体重减脂趋势",
+    "domain": "body",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01",
+      "2026-08-20"
+    ]
+  },
+  {
+    "id": "rag-021",
+    "query": "上旬体重记录",
+    "domain": "body",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01",
+      "2026-08-02",
+      "2026-08-03",
+      "2026-08-04",
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07"
+    ]
+  },
+  {
+    "id": "rag-022",
+    "query": "下旬体重情况",
+    "domain": "body",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-15",
+      "2026-08-16",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19",
+      "2026-08-20"
+    ]
+  },
+  {
+    "id": "rag-023",
+    "query": "8月5日8月10日体脂率",
+    "domain": "body",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-05",
+      "2026-08-10"
+    ]
+  },
+  {
+    "id": "rag-024",
+    "query": "8月10日8月20日腰围",
+    "domain": "body",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-10",
+      "2026-08-20"
+    ]
+  },
+  {
+    "id": "rag-025",
+    "query": "上旬体重汇总",
+    "domain": "body",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01",
+      "2026-08-02",
+      "2026-08-03",
+      "2026-08-04",
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07"
+    ]
+  },
+  {
+    "id": "rag-026",
+    "query": "下旬体重记录",
+    "domain": "body",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-15",
+      "2026-08-16",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19",
+      "2026-08-20"
+    ]
+  },
+  {
+    "id": "rag-027",
+    "query": "8月1日8月10日8月15日体重体脂",
+    "domain": "body",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "2026-08-01",
+      "2026-08-10",
+      "2026-08-15"
+    ]
+  },
+  {
+    "id": "rag-028",
+    "query": "上旬下旬体重体脂腰围",
+    "domain": "body",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "2026-08-01",
+      "2026-08-05",
+      "2026-08-10",
+      "2026-08-15",
+      "2026-08-20"
+    ]
+  },
+  {
+    "id": "rag-029",
+    "query": "8月5日8月15日减脂体重体脂",
+    "domain": "body",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "2026-08-05",
+      "2026-08-10",
+      "2026-08-15",
+      "2026-08-20"
+    ]
+  },
+  {
+    "id": "rag-030",
+    "query": "8月1日鸡胸肉午餐蛋白质",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-01:lunch"
+    ]
+  },
+  {
+    "id": "rag-031",
+    "query": "8月2日牛肉饭午餐蛋白质",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-02:lunch"
+    ]
+  },
+  {
+    "id": "rag-032",
+    "query": "8月3日鸡蛋午餐蛋白质",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-03:lunch"
+    ]
+  },
+  {
+    "id": "rag-033",
+    "query": "8月4日燕麦午餐蛋白质",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-04:lunch"
+    ]
+  },
+  {
+    "id": "rag-034",
+    "query": "8月5日三文鱼午餐蛋白质",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-05:lunch"
+    ]
+  },
+  {
+    "id": "rag-035",
+    "query": "8月6日米饭午餐蛋白质",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-06:lunch"
+    ]
+  },
+  {
+    "id": "rag-036",
+    "query": "8月1日牛肉饭晚餐热量",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-01:dinner"
+    ]
+  },
+  {
+    "id": "rag-037",
+    "query": "8月2日三文鱼晚餐热量",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-02:dinner"
+    ]
+  },
+  {
+    "id": "rag-038",
+    "query": "8月3日豆腐晚餐热量",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-03:dinner"
+    ]
+  },
+  {
+    "id": "rag-039",
+    "query": "8月4日鸡胸肉晚餐热量",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-04:dinner"
+    ]
+  },
+  {
+    "id": "rag-040",
+    "query": "8月5日米饭晚餐热量",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-05:dinner"
+    ]
+  },
+  {
+    "id": "rag-041",
+    "query": "8月6日牛肉饭晚餐热量",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-06:dinner"
+    ]
+  },
+  {
+    "id": "rag-042",
+    "query": "8月7日三文鱼晚餐热量",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-07:dinner"
+    ]
+  },
+  {
+    "id": "rag-043",
+    "query": "8月8日豆腐晚餐热量",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-08:dinner"
+    ]
+  },
+  {
+    "id": "rag-044",
+    "query": "8月1日鸡胸肉午餐",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-01:lunch"
+    ]
+  },
+  {
+    "id": "rag-045",
+    "query": "8月2日牛肉饭午餐",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-02:lunch"
+    ]
+  },
+  {
+    "id": "rag-046",
+    "query": "8月3日鸡蛋午餐蛋白质",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-03:lunch"
+    ]
+  },
+  {
+    "id": "rag-047",
+    "query": "8月5日三文鱼晚餐",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-05:dinner"
+    ]
+  },
+  {
+    "id": "rag-048",
+    "query": "8月6日米饭午餐",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-06:lunch"
+    ]
+  },
+  {
+    "id": "rag-049",
+    "query": "8月9日燕麦早餐",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "2026-08-09:breakfast"
+    ]
+  },
+  {
+    "id": "rag-050",
+    "query": "近三天午餐蛋白质",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01:lunch",
+      "2026-08-02:lunch",
+      "2026-08-03:lunch"
+    ]
+  },
+  {
+    "id": "rag-051",
+    "query": "8月1日至5日晚餐热量",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01:dinner",
+      "2026-08-02:dinner",
+      "2026-08-03:dinner",
+      "2026-08-04:dinner",
+      "2026-08-05:dinner"
+    ]
+  },
+  {
+    "id": "rag-052",
+    "query": "8月1日饮食记录汇总",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01:lunch",
+      "2026-08-01:dinner"
+    ]
+  },
+  {
+    "id": "rag-053",
+    "query": "8月1日至7日午餐摄入",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01:lunch",
+      "2026-08-02:lunch",
+      "2026-08-03:lunch",
+      "2026-08-04:lunch",
+      "2026-08-05:lunch",
+      "2026-08-06:lunch",
+      "2026-08-07:lunch"
+    ]
+  },
+  {
+    "id": "rag-054",
+    "query": "8月1日蛋白质摄入",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01:lunch"
+    ]
+  },
+  {
+    "id": "rag-055",
+    "query": "8月2日三文鱼热量摄入",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-02:dinner"
+    ]
+  },
+  {
+    "id": "rag-056",
+    "query": "8月1日早餐燕麦",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01:breakfast"
+    ]
+  },
+  {
+    "id": "rag-057",
+    "query": "8月1日鸡胸肉午餐",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-01:lunch"
+    ]
+  },
+  {
+    "id": "rag-058",
+    "query": "8月2日三文鱼晚餐",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-02:dinner"
+    ]
+  },
+  {
+    "id": "rag-059",
+    "query": "8月3日豆腐晚餐碳水",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "2026-08-03:dinner"
+    ]
+  },
+  {
+    "id": "rag-060",
+    "query": "8月1日至7日午餐晚餐汇总",
+    "domain": "nutrition",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "2026-08-01:lunch",
+      "2026-08-02:lunch",
+      "2026-08-03:lunch",
+      "2026-08-04:lunch",
+      "2026-08-05:lunch",
+      "2026-08-06:lunch",
+      "2026-08-07:lunch",
+      "2026-08-01:dinner",
+      "2026-08-02:dinner",
+      "2026-08-03:dinner",
+      "2026-08-04:dinner",
+      "2026-08-05:dinner",
+      "2026-08-06:dinner",
+      "2026-08-07:dinner"
+    ]
+  },
+  {
+    "id": "rag-061",
+    "query": "8月1日至5日午餐晚餐",
+    "domain": "nutrition",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "2026-08-01:lunch",
+      "2026-08-02:lunch",
+      "2026-08-03:lunch",
+      "2026-08-04:lunch",
+      "2026-08-05:lunch",
+      "2026-08-01:dinner",
+      "2026-08-02:dinner",
+      "2026-08-03:dinner",
+      "2026-08-04:dinner",
+      "2026-08-05:dinner"
+    ]
+  },
+  {
+    "id": "rag-062",
+    "query": "8月1日鸡胸肉8月5日三文鱼8月6日豆腐",
+    "domain": "nutrition",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "2026-08-01:lunch",
+      "2026-08-05:dinner",
+      "2026-08-06:lunch"
+    ]
+  },
+  {
+    "id": "rag-063",
+    "query": "8月1日至10日午餐晚餐热量",
+    "domain": "nutrition",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "2026-08-01:lunch",
+      "2026-08-02:lunch",
+      "2026-08-03:lunch",
+      "2026-08-04:lunch",
+      "2026-08-05:lunch",
+      "2026-08-06:lunch",
+      "2026-08-07:lunch",
+      "2026-08-08:lunch",
+      "2026-08-09:lunch",
+      "2026-08-10:lunch",
+      "2026-08-01:dinner",
+      "2026-08-02:dinner",
+      "2026-08-03:dinner",
+      "2026-08-04:dinner",
+      "2026-08-05:dinner",
+      "2026-08-06:dinner",
+      "2026-08-07:dinner",
+      "2026-08-08:dinner",
+      "2026-08-09:dinner",
+      "2026-08-10:dinner"
+    ]
+  },
+  {
+    "id": "rag-064",
+    "query": "8月1日深蹲训练记录",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:0}"
+    ]
+  },
+  {
+    "id": "rag-065",
+    "query": "8月2日卧推胸部训练",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:1}"
+    ]
+  },
+  {
+    "id": "rag-066",
+    "query": "8月3日硬拉背部训练",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:2}"
+    ]
+  },
+  {
+    "id": "rag-067",
+    "query": "8月4日引体向上背部",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:3}"
+    ]
+  },
+  {
+    "id": "rag-068",
+    "query": "8月5日杠铃划船训练",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:4}"
+    ]
+  },
+  {
+    "id": "rag-069",
+    "query": "8月6日跑步有氧训练",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:5}"
+    ]
+  },
+  {
+    "id": "rag-070",
+    "query": "8月7日腿部深蹲记录",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:6}"
+    ]
+  },
+  {
+    "id": "rag-071",
+    "query": "8月8日胸部卧推重量",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:7}"
+    ]
+  },
+  {
+    "id": "rag-072",
+    "query": "8月9日硬拉训练详情",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:8}"
+    ]
+  },
+  {
+    "id": "rag-073",
+    "query": "8月10日引体训练记录",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:9}"
+    ]
+  },
+  {
+    "id": "rag-074",
+    "query": "8月11日深蹲腿部训练",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:10}"
+    ]
+  },
+  {
+    "id": "rag-075",
+    "query": "8月12日卧推训练重量",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:11}"
+    ]
+  },
+  {
+    "id": "rag-076",
+    "query": "8月13日跑步有氧记录",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:12}"
+    ]
+  },
+  {
+    "id": "rag-077",
+    "query": "8月14日划船背部训练",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:13}"
+    ]
+  },
+  {
+    "id": "rag-078",
+    "query": "8月15日深蹲训练情况",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:14}"
+    ]
+  },
+  {
+    "id": "rag-079",
+    "query": "8月1日腿部训练",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:0}"
+    ]
+  },
+  {
+    "id": "rag-080",
+    "query": "8月2日胸部卧推",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:1}"
+    ]
+  },
+  {
+    "id": "rag-081",
+    "query": "8月6日有氧跑步",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:5}"
+    ]
+  },
+  {
+    "id": "rag-082",
+    "query": "8月3日背部硬拉",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:2}"
+    ]
+  },
+  {
+    "id": "rag-083",
+    "query": "8月5日杠铃划船",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": [
+      "{train:4}"
+    ]
+  },
+  {
+    "id": "rag-084",
+    "query": "8月1日8月7日8月11日深蹲",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:0}",
+      "{train:6}",
+      "{train:10}"
+    ]
+  },
+  {
+    "id": "rag-085",
+    "query": "8月2日8月8日卧推",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:1}",
+      "{train:7}"
+    ]
+  },
+  {
+    "id": "rag-086",
+    "query": "8月3日8月4日8月9日背部训练",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:2}",
+      "{train:3}",
+      "{train:8}"
+    ]
+  },
+  {
+    "id": "rag-087",
+    "query": "8月1日8月7日腿部训练",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:0}",
+      "{train:6}"
+    ]
+  },
+  {
+    "id": "rag-088",
+    "query": "8月2日8月8日8月12日胸部",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:1}",
+      "{train:7}",
+      "{train:11}"
+    ]
+  },
+  {
+    "id": "rag-089",
+    "query": "8月6日8月13日跑步有氧",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:5}",
+      "{train:12}"
+    ]
+  },
+  {
+    "id": "rag-090",
+    "query": "8月5日8月14日划船",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:4}",
+      "{train:13}"
+    ]
+  },
+  {
+    "id": "rag-091",
+    "query": "8月4日8月10日引体",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:3}",
+      "{train:9}"
+    ]
+  },
+  {
+    "id": "rag-092",
+    "query": "8月3日8月9日硬拉",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:2}",
+      "{train:8}"
+    ]
+  },
+  {
+    "id": "rag-093",
+    "query": "8月1日至7日训练",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:0}",
+      "{train:1}",
+      "{train:2}",
+      "{train:3}",
+      "{train:4}",
+      "{train:5}",
+      "{train:6}"
+    ]
+  },
+  {
+    "id": "rag-094",
+    "query": "8月1日深蹲8月2日卧推",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:0}",
+      "{train:1}"
+    ]
+  },
+  {
+    "id": "rag-095",
+    "query": "8月1日8月2日训练",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": [
+      "{train:0}",
+      "{train:1}"
+    ]
+  },
+  {
+    "id": "rag-096",
+    "query": "8月1日深蹲8月2日卧推8月3日硬拉",
+    "domain": "fitness",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "{train:0}",
+      "{train:1}",
+      "{train:2}",
+      "{train:6}",
+      "{train:7}",
+      "{train:8}",
+      "{train:10}",
+      "{train:11}",
+      "{train:14}"
+    ]
+  },
+  {
+    "id": "rag-097",
+    "query": "8月3日8月4日8月9日引体划船",
+    "domain": "fitness",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "{train:2}",
+      "{train:3}",
+      "{train:4}",
+      "{train:8}",
+      "{train:9}",
+      "{train:13}"
+    ]
+  },
+  {
+    "id": "rag-098",
+    "query": "8月1日深蹲8月6日跑步8月7日腿部",
+    "domain": "fitness",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "{train:0}",
+      "{train:5}",
+      "{train:6}",
+      "{train:10}",
+      "{train:12}",
+      "{train:14}"
+    ]
+  },
+  {
+    "id": "rag-099",
+    "query": "8月1日至14日训练记录",
+    "domain": "fitness",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "{train:0}",
+      "{train:1}",
+      "{train:2}",
+      "{train:3}",
+      "{train:4}",
+      "{train:5}",
+      "{train:6}",
+      "{train:7}",
+      "{train:8}",
+      "{train:9}",
+      "{train:10}",
+      "{train:11}",
+      "{train:12}",
+      "{train:13}"
+    ]
+  },
+  {
+    "id": "rag-100",
+    "query": "8月1日至15日胸部腿部背部训练",
+    "domain": "fitness",
+    "difficulty": "complex",
+    "relevant_source_ids": [
+      "{train:0}",
+      "{train:1}",
+      "{train:2}",
+      "{train:3}",
+      "{train:4}",
+      "{train:5}",
+      "{train:6}",
+      "{train:7}",
+      "{train:8}",
+      "{train:9}",
+      "{train:10}",
+      "{train:11}",
+      "{train:12}",
+      "{train:13}",
+      "{train:14}"
+    ]
+  }
+]

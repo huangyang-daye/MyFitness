@@ -6,7 +6,6 @@ import hashlib
 import re
 from collections import defaultdict
 from datetime import date
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -277,23 +276,234 @@ def _collect_report_chunks(
     return chunks
 
 
-def _split_report_sections(content_md: str, *, max_chars: int = 1200) -> list[str]:
-    """按 Markdown 二级标题切分；过长段落再按长度切。"""
-    text = content_md.strip()
+_HEADING_SPLIT = re.compile(r"\n(?=#{1,3} (?!第\s*\d+\s*页))")
+_PARAGRAPH_SPLIT = re.compile(r"\n{2,}")
+_SENTENCE_SPLIT = re.compile(
+    r"(?<=[。！？；…])"
+    r"|(?<![A-Za-z0-9])(?<=[.!?])(?=\s+[A-Z\u4e00-\u9fff「『“（(])"
+)
+_LIST_LINE = re.compile(r"^([-*●•]\s+|\d+[.、,，]\s*)")
+_PAGE_HEADING_LINE = re.compile(r"^#{1,3} 第\s*\d+\s*页\s*$")
+_COMPLETE_END = re.compile(r"[。！？；…!?][」』”’）)\s]*$")
+
+
+def _split_report_sections(content_md: str, *, max_chars: int = 1800, min_chars: int = 200) -> list[str]:
+    """按标题打包，过长时再按段落 / 句子切，避免从句子中间断开。"""
+    text = content_md.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         return []
 
-    parts = re.split(r"\n(?=## )", text)
-    sections: list[str] = []
-    for part in parts:
-        part = part.strip()
-        if not part:
+    sections = [part.strip() for part in _HEADING_SPLIT.split(text) if part.strip()]
+    packed: list[str] = []
+    buf: list[str] = []
+    buf_len = 0
+    for section in sections:
+        extra = len(section) + (2 if buf else 0)
+        if buf and buf_len + extra > max_chars:
+            packed.append("\n\n".join(buf))
+            buf = [section]
+            buf_len = len(section)
+        else:
+            buf.append(section)
+            buf_len += extra
+    if buf:
+        packed.append("\n\n".join(buf))
+
+    chunks: list[str] = []
+    for block in packed:
+        if len(block) <= max_chars:
+            chunks.append(block)
+        else:
+            chunks.extend(_split_overflow(block, max_chars))
+    merged = _merge_small_chunks(chunks, min_chars=min_chars, max_chars=max_chars)
+    stitched = _stitch_incomplete_sentences(merged, max_chars=max_chars)
+    return stitched or [text[:max_chars]]
+
+
+def _split_overflow(text: str, max_chars: int) -> list[str]:
+    heading = _leading_heading(text)
+    raw_paragraphs = [part.strip() for part in _PARAGRAPH_SPLIT.split(text) if part.strip()]
+    paragraphs = _fold_page_headings(raw_paragraphs)
+    units: list[str] = []
+    for paragraph in paragraphs:
+        if len(paragraph) <= max_chars:
+            units.append(paragraph)
+        else:
+            sentences = [part.strip() for part in _SENTENCE_SPLIT.split(paragraph) if part.strip()]
+            units.extend(sentences or [paragraph])
+
+    packed = _greedy_pack(units, max_chars, sep="\n\n")
+    chunks: list[str] = []
+    for block in packed:
+        if len(block) <= max_chars:
+            chunks.append(_with_heading(block, heading))
             continue
-        if len(part) <= max_chars:
-            sections.append(part)
+        for piece in _split_on_soft_breaks(block, max_chars):
+            chunks.append(_with_heading(piece, heading))
+    return chunks
+
+
+def _greedy_pack(pieces: list[str], max_chars: int, *, sep: str) -> list[str]:
+    chunks: list[str] = []
+    buf: list[str] = []
+    size = 0
+    sep_len = len(sep)
+    for piece in pieces:
+        extra = len(piece) + (sep_len if buf else 0)
+        if buf and size + extra > max_chars:
+            chunks.append(sep.join(buf))
+            buf = [piece]
+            size = len(piece)
+        else:
+            buf.append(piece)
+            size += extra
+    if buf:
+        chunks.append(sep.join(buf))
+    return chunks
+
+
+def _split_on_soft_breaks(text: str, max_chars: int) -> list[str]:
+    """单句仍超长时，优先在标点处切开；换行多半是 PDF 折行，放到最后。"""
+    chunks: list[str] = []
+    start = 0
+    length = len(text)
+    while start < length:
+        remain = length - start
+        if remain <= max_chars:
+            tail = text[start:].strip()
+            if tail:
+                chunks.append(tail)
+            break
+        window_end = start + max_chars
+        floor = start + max(1, max_chars // 2)
+        cut = _find_soft_cut(text, floor, window_end)
+        if cut is None:
+            cut = window_end
+        piece = text[start:cut].strip()
+        if piece:
+            chunks.append(piece)
+        start = cut
+        while start < length and text[start] in " \t":
+            start += 1
+    return chunks
+
+
+def _find_soft_cut(text: str, floor: int, window_end: int) -> int | None:
+    for chars in ("。！？；…!?", "，、；,;：:", " ", "\n"):
+        for index in range(window_end, floor - 1, -1):
+            if text[index - 1] in chars:
+                return index
+    return None
+
+
+def _leading_heading(text: str) -> str:
+    first = text.split("\n", 1)[0].strip()
+    if first.startswith("#") and not _PAGE_HEADING_LINE.match(first):
+        return first
+    return ""
+
+
+def _with_heading(text: str, heading: str) -> str:
+    if not heading:
+        return text
+    first = text.split("\n", 1)[0].strip()
+    if first == heading or first.startswith("#"):
+        return text
+    return f"{heading}\n\n{text}"
+
+
+def _merge_small_chunks(chunks: list[str], *, min_chars: int, max_chars: int) -> list[str]:
+    if len(chunks) <= 1:
+        return chunks
+    merged: list[str] = [chunks[0]]
+    for chunk in chunks[1:]:
+        previous = merged[-1]
+        combined = len(previous) + 2 + len(chunk)
+        too_small = len(chunk) < min_chars or len(previous) < min_chars
+        if too_small and combined <= max_chars:
+            merged[-1] = previous.rstrip() + "\n\n" + chunk.lstrip()
+        else:
+            merged.append(chunk)
+    return merged
+
+
+def _looks_incomplete(text: str) -> bool:
+    stripped = text.rstrip()
+    if not stripped:
+        return False
+    last_line = stripped.split("\n")[-1].strip()
+    if _PAGE_HEADING_LINE.match(last_line):
+        return True
+    if _LIST_LINE.match(last_line):
+        return False
+    return _COMPLETE_END.search(last_line) is None
+
+
+def _fold_page_headings(paragraphs: list[str]) -> list[str]:
+    """PDF「第 N 页」只是分页标记，并入下一段，不当成独立切点。"""
+    folded: list[str] = []
+    carry = ""
+    for paragraph in paragraphs:
+        if _PAGE_HEADING_LINE.match(paragraph.strip()):
+            carry = paragraph.strip()
             continue
-        for i in range(0, len(part), max_chars):
-            sections.append(part[i : i + max_chars])
-    if not sections:
-        sections.append(text[:max_chars])
-    return sections
+        if carry:
+            paragraph = f"{carry}\n\n{paragraph}"
+            carry = ""
+        folded.append(paragraph)
+    if carry and folded:
+        folded[-1] = f"{folded[-1]}\n\n{carry}"
+    elif carry:
+        folded.append(carry)
+    return folded
+
+
+def _lstrip_page_headings(text: str) -> str:
+    lines = text.split("\n")
+    index = 0
+    while index < len(lines) and (
+        not lines[index].strip() or _PAGE_HEADING_LINE.match(lines[index].strip())
+    ):
+        index += 1
+    return "\n".join(lines[index:]).strip()
+
+
+def _take_first_sentence(text: str) -> tuple[str, str]:
+    match = _SENTENCE_SPLIT.search(text)
+    if match is None:
+        return text, ""
+    cut = match.end()
+    return text[:cut], text[cut:]
+
+
+def _stitch_incomplete_sentences(chunks: list[str], *, max_chars: int) -> list[str]:
+    """上一块若停在句中（常见于 PDF 分页），把下一块的第一句补回来。"""
+    pending = list(chunks)
+    result: list[str] = []
+    overflow = int(max_chars * 1.25)
+    while pending:
+        current = pending.pop(0)
+        while pending and _looks_incomplete(current):
+            nxt = pending[0]
+            first_line = nxt.lstrip().split("\n", 1)[0].strip()
+            if first_line.startswith("#") and not _PAGE_HEADING_LINE.match(first_line):
+                break
+            body = _lstrip_page_headings(nxt)
+            if not body:
+                pending.pop(0)
+                continue
+            take, rest = _take_first_sentence(body)
+            if not take.strip():
+                break
+            candidate = (current.rstrip() + "\n" + take.lstrip()).strip()
+            if len(candidate) > overflow:
+                break
+            current = candidate
+            if rest.strip():
+                pending[0] = rest.strip()
+            else:
+                pending.pop(0)
+            if not _looks_incomplete(current):
+                break
+        result.append(current)
+    return result

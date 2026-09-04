@@ -1,4 +1,4 @@
-"""MyFitness RAG — pgvector 语义检索。"""
+"""MyFitness RAG — pgvector 向量召回 + BM25 关键词召回。"""
 
 from myfitness.rag.indexer import index_user_data
 from myfitness.rag.pipeline import (

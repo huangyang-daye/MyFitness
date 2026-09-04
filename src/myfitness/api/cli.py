@@ -65,7 +65,7 @@ chart_app = typer.Typer(help="Mermaid 统计图")
 scheduler_app = typer.Typer(help="定时任务调度")
 session_app = typer.Typer(help="历史对话管理")
 artifact_app = typer.Typer(help="报表与图表产物查看")
-rag_app = typer.Typer(help="RAG 语义检索（pgvector）")
+rag_app = typer.Typer(help="RAG 双路检索（向量 KNN + BM25）")
 app.add_typer(db_app, name="db")
 app.add_typer(llm_app, name="llm")
 app.add_typer(xunji_app, name="xunji")
@@ -207,7 +207,7 @@ def rag_search(
     user_id: int = typer.Option(1, "--user-id", help="用户 ID"),
     top_k: int = typer.Option(5, "--top-k", help="返回条数"),
 ) -> None:
-    """语义检索 RAG 向量库。"""
+    """双路检索（向量 KNN + BM25）RAG 库。"""
     from myfitness.rag.format import format_retrieved_chunks
     from myfitness.rag.store import search_chunks
 

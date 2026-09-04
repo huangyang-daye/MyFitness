@@ -958,19 +958,11 @@ def _is_expired(pending: PendingConfirmation) -> bool:
 
 
 def build_langgraph_app(session: Session):
-    """LangGraph 包装 — 供后续 Checkpoint / 并行流扩展。"""
-    try:
-        from langgraph.graph import END, StateGraph
-    except ImportError as exc:
-        raise ImportError('pip install -e ".[agents]"') from exc
+    """返回分析子图（plan → execute_ready → reflect → judge → summary）。
 
-    def chat_node(graph_state: dict) -> dict:
-        inner = MyFitnessGraphState.model_validate(graph_state["state"])
-        updated = run_chat_turn(session, inner, graph_state["message"])
-        return {"state": updated.model_dump(mode="json")}
+    session 参数保留以兼容旧签名；运行时 Session 经 invoke config 注入。
+    """
+    from myfitness.graph.langgraph_flow import build_analysis_graph
 
-    graph = StateGraph(dict)
-    graph.add_node("chat", chat_node)
-    graph.set_entry_point("chat")
-    graph.add_edge("chat", END)
-    return graph.compile()
+    _ = session
+    return build_analysis_graph()

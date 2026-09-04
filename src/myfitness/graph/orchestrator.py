@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, date, datetime, timedelta
 
@@ -18,21 +17,14 @@ from myfitness.agents.manual_parser import (
     parse_nutrition_entry,
 )
 from myfitness.agents.nutritionist import run_nutrition_agent
-from myfitness.agents.summary import run_summary_agent, should_stream_summary
 from myfitness.agents.tools.query_planner import QueryPlan, build_query_plan
 from myfitness.db.repositories.goals import UserGoalRepository
-from myfitness.graph.context_reflection import reflect_before_answer
-from myfitness.graph.judge import judge_turn, max_judge_attempts
-from myfitness.graph.planner import build_task_plan
-from myfitness.graph.progress import ProgressCallback, emit_plan, emit_step, emit_task_status, label_for
-from myfitness.graph.task_plan import ExecutionResult, JudgeVerdict, PlannedTask, TaskPlan, TaskResult
+from myfitness.graph.progress import ProgressCallback, emit_step, emit_task_status, label_for
+from myfitness.graph.task_plan import ExecutionResult, PlannedTask, TaskPlan, TaskResult
 from myfitness.memory.manager import attach_memory
 from myfitness.memory.types import MemoryBundle
-from myfitness.schemas.agent_outputs import AgentOutputs
 from myfitness.schemas.state import Intent, MyFitnessGraphState, PendingConfirmation, RouteResult
 from myfitness.services.context_with_query import load_context_for_turn
-
-logger = logging.getLogger(__name__)
 
 _ACTION_ONLY = {
     Intent.SYNC_TRIGGER,
@@ -55,91 +47,22 @@ def run_orchestrated_turn(
 ) -> tuple[ExecutionResult, bool]:
     """执行 Planner 任务并在 Judge 通过后生成 Summary。
 
-    返回 (execution, stream_summary)。
+    返回 (execution, stream_summary)。内部委托 LangGraph 分析子图。
     """
-    llm_enabled = use_llm
-    task_plan = plan or build_task_plan(state.user_message, route, use_llm=llm_enabled)
-    emit_plan(on_progress, task_plan)
-    execution = ExecutionResult()
-    retry_ids: set[str] = set()
-    fetch_task_ids = [
-        task.id
-        for task in task_plan.tasks
-        if task.intent == Intent.DATA_QUERY and task.params.get("include_latest_body")
-    ]
+    from myfitness.graph.langgraph_flow import run_analysis_graph
 
-    for attempt in range(1, max_judge_attempts() + 1):
-        emit_step(on_progress, f"{label_for('planner')}（第 {attempt} 轮）…")
-        execution = _execute_plan(
-            session,
-            state,
-            route,
-            task_plan,
-            memory_bundle,
-            on_progress=on_progress,
-            retry_task_ids=retry_ids,
-        )
-        if execution.needs_confirmation:
-            return execution, False
-
-        emit_step(on_progress, f"{label_for('context_reflection')}…")
-        reflection = reflect_before_answer(
-            state.user_message,
-            execution,
-            fetch_task_ids=fetch_task_ids,
-            use_llm=llm_enabled,
-        )
-        if reflection.confirmed_notes and execution.context:
-            execution.context = execution.context.model_copy(
-                update={"reflection_notes": reflection.confirmed_notes}
-            )
-
-        emit_step(on_progress, f"{label_for('judge')}…")
-        if not reflection.ready:
-            verdict = JudgeVerdict(
-                satisfied=False,
-                feedback=reflection.feedback or "个体数据尚未从数据库确认",
-                missing=reflection.missing_fetches,
-                retry_task_ids=reflection.retry_task_ids or fetch_task_ids,
-            )
-        else:
-            verdict = judge_turn(
-                state.user_message,
-                task_plan,
-                execution,
-                attempt=attempt,
-                use_llm=llm_enabled,
-            )
-        if verdict.satisfied:
-            break
-        retry_ids = set(verdict.retry_task_ids)
-        if not retry_ids:
-            retry_ids = {
-                task.id
-                for task in task_plan.tasks
-                if task.intent not in {Intent.MANUAL_ENTRY, Intent.CONFIRMATION_RESPONSE}
-            }
-        execution.errors.append(verdict.feedback or "Judge 认为结果未满足用户需求")
-        logger.info("Judge 未通过（第 %s 轮）: %s", attempt, verdict.feedback)
-        if attempt >= max_judge_attempts():
-            break
-
-    emit_step(on_progress, f"{label_for('summary')}…")
-    execution.agent_outputs.summary = run_summary_agent(
-        execution.agent_outputs,
-        execution.context,
-        task_plan.primary_intent,
-        state.user_message,
-    )
-    execution.agents_invoked.append("summary")
-    if execution.reply_parts:
-        execution.reply_parts.append(execution.agent_outputs.summary.content_md)
-    return execution, bool(llm_enabled) and should_stream_summary(
-        task_plan.primary_intent, state.user_message
+    return run_analysis_graph(
+        session,
+        state,
+        route,
+        memory_bundle,
+        on_progress=on_progress,
+        plan=plan,
+        use_llm=use_llm,
     )
 
 
-def _execute_plan(
+def execute_plan(
     session: Session,
     state: MyFitnessGraphState,
     route: RouteResult,
@@ -153,7 +76,7 @@ def _execute_plan(
     completed: set[str] = set()
     if retry_task_ids:
         completed = {task.id for task in plan.tasks if task.id not in retry_task_ids}
-    levels = _task_levels(plan.tasks)
+    levels = task_levels(plan.tasks)
 
     for level in levels:
         for task in level:
@@ -162,7 +85,7 @@ def _execute_plan(
             if retry_task_ids and task.id not in retry_task_ids:
                 continue
             emit_task_status(on_progress, task.id, "running", description=task.description)
-            result = _execute_task(
+            result = execute_task(
                 session, state, route, plan, task, memory_bundle, execution, on_progress
             )
             execution.task_results.append(result)
@@ -187,7 +110,7 @@ def _execute_plan(
     return execution
 
 
-def _execute_task(
+def execute_task(
     session: Session,
     state: MyFitnessGraphState,
     route: RouteResult,
@@ -484,7 +407,7 @@ def _merge_execution_context(execution: ExecutionResult, new_context) -> None:
     )
 
 
-def _task_levels(tasks: list[PlannedTask]) -> list[list[PlannedTask]]:
+def task_levels(tasks: list[PlannedTask]) -> list[list[PlannedTask]]:
     remaining = {task.id: task for task in tasks}
     done: set[str] = set()
     levels: list[list[PlannedTask]] = []

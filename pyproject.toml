@@ -37,6 +37,9 @@ agents = [
     "langchain-openai>=0.1.0",
     "apscheduler>=3.10.0",
 ]
+cn-search = [
+    "cn-scraper-mcp",
+]
 
 [project.scripts]
 myfitness = "myfitness.api.cli:app"

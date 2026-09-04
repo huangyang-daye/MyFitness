@@ -1,0 +1,86 @@
+[
+  {
+    "id": "rag-001",
+    "query": "最近体重变化怎么样",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": ["2026-08-20", "2026-08-22"]
+  },
+  {
+    "id": "rag-002",
+    "query": "体脂率多少",
+    "domain": "body",
+    "difficulty": "simple",
+    "relevant_source_ids": ["2026-08-22"]
+  },
+  {
+    "id": "rag-003",
+    "query": "体重减脂趋势",
+    "domain": "body",
+    "difficulty": "medium",
+    "relevant_source_ids": ["2026-08-20", "2026-08-22"]
+  },
+  {
+    "id": "rag-004",
+    "query": "午餐蛋白质摄入多少",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": ["2026-08-20:lunch"]
+  },
+  {
+    "id": "rag-005",
+    "query": "鸡胸肉吃了多少",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": ["2026-08-20:lunch"]
+  },
+  {
+    "id": "rag-006",
+    "query": "晚餐热量摄入",
+    "domain": "nutrition",
+    "difficulty": "simple",
+    "relevant_source_ids": ["2026-08-21:dinner"]
+  },
+  {
+    "id": "rag-007",
+    "query": "饮食记录汇总",
+    "domain": "nutrition",
+    "difficulty": "medium",
+    "relevant_source_ids": ["2026-08-20:lunch", "2026-08-21:dinner"]
+  },
+  {
+    "id": "rag-008",
+    "query": "深蹲训练记录",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": ["{squat_id}"]
+  },
+  {
+    "id": "rag-009",
+    "query": "卧推胸部训练",
+    "domain": "fitness",
+    "difficulty": "simple",
+    "relevant_source_ids": ["{bench_id}"]
+  },
+  {
+    "id": "rag-010",
+    "query": "最近腿部训练",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": ["{squat_id}"]
+  },
+  {
+    "id": "rag-011",
+    "query": "训练卧推重量",
+    "domain": "fitness",
+    "difficulty": "medium",
+    "relevant_source_ids": ["{bench_id}"]
+  },
+  {
+    "id": "rag-012",
+    "query": "最近训练情况",
+    "domain": "fitness",
+    "difficulty": "complex",
+    "relevant_source_ids": ["{squat_id}", "{bench_id}"]
+  }
+]

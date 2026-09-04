@@ -139,10 +139,16 @@ myfitness chat --session 550e8400-e29b-41d4-a716-446655440000
 
 ### Agent 编排与数据检索
 
-复杂问题会由 **Planner** 拆成可执行任务列表，**Orchestrator** 按依赖调度各 Specialist Agent，**Judge** 在收尾前评估是否满足用户要求。系统在 Planner 之后还会自动补齐必要的检索子任务，例如：
+复杂问题会由 **Planner** 拆成可执行任务列表，经 **LangGraph** 子图按 `plan → execute_ready → reflect → judge → summary` 调度（Judge 未通过可回环重跑），**Orchestrator** 在 `execute_ready` 节点内按依赖执行各 Specialist Agent。系统在 Planner 之后还会自动补齐必要的检索子任务，例如：
 
 - 个性化饮食 / 减脂建议 → 从数据库拉取**最新体重、体脂**（`latest_metrics`），避免误用知识库中的历史描述；
 - 「今天练背 / 结合过往训练记录」→ 自动扩大日期范围并检索对应肌群的历史训练，而非仅查当天。
+
+联网检索会走博查 / 智谱 / DuckDuckGo，并在安装 [cn-scraper-mcp](https://github.com/goesByhc/cn-scraper-mcp) 后补充中文平台站内搜索：
+
+- 话里点名「小红书 / 知乎 / B 站 / 微博 / 淘宝 / 京东 / 豆瓣 / 大众点评 / 抖音」时，检索对应平台；
+- 普通知识问默认额外搜 B 站（无需登录）；小红书、知乎、京东等需要本机 Cookie 或 Chrome。
+- 安装：`pip install -e ".[cn-search]"`。远程 MCP 可设 `CN_SCRAPER_MCP_URL=http://127.0.0.1:8000/mcp`。
 
 作答前会经过 **上下文反思**（`context_reflection`）：若个体数据尚未从数据库确认，会要求补检索或重试，而不是在 Prompt 里写死规则。
 
@@ -264,7 +270,7 @@ src/myfitness/
 ├── xunji/                # 训记 Skill 客户端
 ├── db/                   # 模型、Repository、sql_logging
 ├── sync/                 # 训记同步
-├── graph/                # LangGraph 编排：planner / orchestrator / judge / chat
+├── graph/                # LangGraph：langgraph_flow / planner / orchestrator / judge / chat
 │   ├── planner_enhance.py    # Planner 后处理：补齐检索任务与依赖
 │   └── context_reflection.py # 作答前核查个体数据是否已从 DB 确认
 ├── agents/               # Specialist Agent 与 tools（查询 / 写入 / 统计图）
@@ -315,7 +321,7 @@ D:\MyFitness-data\         ← 使用记录（不进 Git，可单独备份或清
 ## 开发阶段
 
 - **M1**：数据库、训记同步、CLI
-- **M2**（当前）：LangGraph 多 Agent 编排、Planner 任务面板、上下文反思、RAG
+- **M2**（当前）：LangGraph StateGraph（plan→execute→reflect→judge→summary）、Planner 任务面板、上下文反思、RAG
 - **M3**：定时日报与调度
 - **M4**：多轮对话、Web / CLI 共用会话与模型预设
 - **M5**：测试与打磨

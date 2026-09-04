@@ -255,7 +255,7 @@ def _format_context_retrieval(context: ContextSnapshot | None) -> str:
             )
         )
     return (
-        "【语义检索结果 — 优先引用以下历史片段，注明来源日期/类型；"
+        "【检索结果（向量+关键词）— 优先引用以下历史片段，注明来源日期/类型；"
         "与数据库明细冲突时以数据库为准】\n"
         + format_retrieved_chunks(chunks)
     )

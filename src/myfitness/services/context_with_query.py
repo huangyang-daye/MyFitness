@@ -50,7 +50,7 @@ def load_context_for_turn(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> tuple[ContextSnapshot, list[str]]:
-    """构建 Agent 上下文；若问题涉及历史数据则先查 DB，再语义检索。"""
+    """构建 Agent 上下文；若问题涉及历史数据则先查 DB，再双路检索。"""
     tools_invoked: list[str] = []
     plan = plan or build_query_plan(
         message,
@@ -89,7 +89,7 @@ def load_context_for_turn(
         emit(on_progress, f"{label_for('load_context')}…")
         context = load_context_snapshot(session, user_id)
 
-    emit(on_progress, "语义检索…")
+    emit(on_progress, "检索中…")
     retrieved = retrieve_for_turn(
         session,
         user_id,

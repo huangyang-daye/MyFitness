@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -32,6 +33,54 @@ _PAST_DAYS_RE = re.compile(r"(?:过[去了]?|前)\s*(\d+)\s*天")
 _SCHEDULE_WORDS = ("定时", "每天", "每日", "自动")
 _SCHEDULE_ACTION_WORDS = ("日报", "同步", "任务", "报告")
 _LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+
+
+@dataclass(frozen=True)
+class IntentClassificationTrace:
+    """意图识别流水线各步结果，供评测与调试。"""
+
+    keyword: RouteResult | None
+    llm_raw: RouteResult | None
+    reconciled: RouteResult | None
+    selected_step: str
+    final: RouteResult
+
+
+def trace_classify_intent(
+    message: str,
+    pending: PendingConfirmation | None = None,
+    *,
+    today: date | None = None,
+    use_llm: bool = True,
+) -> IntentClassificationTrace:
+    """执行与 classify_intent 相同的流水线，并返回各步中间结果。"""
+    text = message.strip()
+    lower = text.lower()
+    today = today or datetime.now(_LOCAL_TZ).date()
+
+    if pending and _is_confirmation_response(text):
+        if any(w in lower or w in text for w in CONFIRM_WORDS):
+            final = RouteResult(Intent.CONFIRMATION_RESPONSE, confirmation_action="confirm")
+            return IntentClassificationTrace(None, None, None, "confirmation", final)
+        if any(w in lower or w in text for w in CANCEL_WORDS):
+            final = RouteResult(Intent.CONFIRMATION_RESPONSE, confirmation_action="cancel")
+            return IntentClassificationTrace(None, None, None, "confirmation", final)
+
+    keyword = _keyword_classify(text, today)
+    llm_raw: RouteResult | None = None
+    reconciled: RouteResult | None = None
+
+    if use_llm:
+        llm_raw = _llm_classify(text, today)
+        if llm_raw is not None:
+            reconciled = _reconcile(llm_raw, keyword)
+            return IntentClassificationTrace(keyword, llm_raw, reconciled, "llm_reconciled", reconciled)
+
+    if keyword:
+        return IntentClassificationTrace(keyword, llm_raw, reconciled, "keyword_fallback", keyword)
+
+    final = RouteResult(intents=[Intent.GENERAL])
+    return IntentClassificationTrace(keyword, llm_raw, reconciled, "default_general", final)
 
 
 def classify_intent(

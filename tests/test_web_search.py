@@ -34,6 +34,7 @@ def _settings(**overrides) -> Settings:
         "web_search_api_key": "",
         "bocha_api_key": "sk-bocha",
         "zhipu_api_key": "",
+        "cn_scraper_enabled": False,
         "web_search_count": 5,
         "web_search_timeout": 10,
         "web_search_freshness": "noLimit",
