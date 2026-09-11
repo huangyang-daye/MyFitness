@@ -7,8 +7,15 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from myfitness.agents.document_generator import generate_document_body, infer_document_title
-from myfitness.agents.tools.document_tools import apply_document_export, wants_minimal_chat_for_document
+from myfitness.agents.document_generator import (
+    build_document_messages,
+    generate_document_body,
+    infer_document_title,
+)
+from myfitness.agents.tools.document_tools import (
+    apply_document_export,
+    wants_minimal_chat_for_document,
+)
 from myfitness.config import get_settings
 from myfitness.db.models import Base
 from myfitness.schemas.agent_outputs import AgentOutputs, NutritionAgentOutput
@@ -38,6 +45,7 @@ def db_session():
 def test_infer_document_title():
     assert infer_document_title("生成饮食规划文档") == "饮食规划"
     assert infer_document_title("写训练计划文档") == "训练计划"
+    assert infer_document_title("生成训练专项报告文档") == "训练分析报告"
 
 
 def test_wants_minimal_chat_for_document():
@@ -76,6 +84,37 @@ def test_generate_document_body_rule_based_excludes_query_dump():
     assert "数据库查询结果" not in body
     assert "160g" in body
     assert "# 饮食规划" in body
+
+
+def test_build_document_messages_includes_previous_analysis_source():
+    source = "最近训练量偏高，建议下周降低总量并增加恢复。"
+
+    messages = build_document_messages(
+        "根据上一轮训练建议生成专项报告文档",
+        AgentOutputs(),
+        None,
+        source_content=source,
+    )
+
+    assert source in messages[1]["content"]
+    assert "以此为报告主体" in messages[1]["content"]
+
+
+def test_generate_document_body_rule_based_prefers_previous_analysis():
+    source = "最近训练量偏高，建议下周降低总量并增加恢复。"
+
+    with patch("myfitness.agents.document_generator.is_llm_configured", return_value=False):
+        body = generate_document_body(
+            "根据上一轮训练建议生成专项报告文档",
+            AgentOutputs(),
+            None,
+            fallback="不应采用的旧兜底文本",
+            source_content=source,
+        )
+
+    assert "# 训练分析报告" in body
+    assert source in body
+    assert "不应采用的旧兜底文本" not in body
 
 
 def test_apply_document_export_uses_generated_body_not_chat_reply(db_session, document_dir):

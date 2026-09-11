@@ -32,6 +32,7 @@ _ACTION_ONLY = {
     Intent.CHART_TRIGGER,
     Intent.SCHEDULE_MANAGE,
     Intent.CONFIRMATION_RESPONSE,
+    Intent.UNSUPPORTED,
 }
 
 
@@ -44,6 +45,7 @@ def run_orchestrated_turn(
     on_progress: ProgressCallback | None = None,
     plan: TaskPlan | None = None,
     use_llm: bool | None = None,
+    resume: bool = False,
 ) -> tuple[ExecutionResult, bool]:
     """执行 Planner 任务并在 Judge 通过后生成 Summary。
 
@@ -59,6 +61,7 @@ def run_orchestrated_turn(
         on_progress=on_progress,
         plan=plan,
         use_llm=use_llm,
+        resume=resume,
     )
 
 
@@ -292,7 +295,7 @@ def _run_analysis_task(
         start_date=task.start_date or route.start_date,
         end_date=task.end_date or route.end_date,
     )
-    if memory_bundle.short_term or memory_bundle.long_term:
+    if memory_bundle.short_term or memory_bundle.episodic or memory_bundle.long_term:
         context = attach_memory(context, memory_bundle)
         tools.append("memory")
 
@@ -403,6 +406,7 @@ def _merge_execution_context(execution: ExecutionResult, new_context) -> None:
             "user_goals": new_context.user_goals or old.user_goals,
             "memory_long_term": new_context.memory_long_term or old.memory_long_term,
             "memory_short_term": new_context.memory_short_term or old.memory_short_term,
+            "memory_episodic": new_context.memory_episodic or old.memory_episodic,
         }
     )
 

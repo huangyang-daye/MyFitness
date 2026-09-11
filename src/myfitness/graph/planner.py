@@ -9,9 +9,10 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from myfitness.agents.intent_agent import _extract_json, _parse_date_range, _parse_domain
-from myfitness.graph.context_reflection import needs_personalized_context
 from myfitness.debug import trace_agent
+from myfitness.graph.context_reflection import needs_personalized_context
 from myfitness.graph.planner_enhance import enhance_task_plan
+from myfitness.graph.refusal import should_refuse
 from myfitness.graph.task_plan import PlannedTask, TaskPlan
 from myfitness.llm.factory import chat_completion, is_llm_configured
 from myfitness.schemas.state import Intent, RouteResult
@@ -54,6 +55,8 @@ def should_use_orchestrator(
     use_llm: bool | None = None,
 ) -> bool:
     """是否走 Planner + Orchestrator + Judge 路径。"""
+    if should_refuse(route):
+        return False
     llm_enabled = is_llm_configured() if use_llm is None else use_llm
     if len(route.intents) > 1:
         return True

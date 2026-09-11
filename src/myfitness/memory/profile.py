@@ -15,7 +15,7 @@ from myfitness.schemas.state import Intent
 
 logger = logging.getLogger(__name__)
 
-_SKIP_INTENTS = {Intent.CONFIRMATION_RESPONSE}
+_SKIP_INTENTS = {Intent.CONFIRMATION_RESPONSE, Intent.UNSUPPORTED}
 _SKIP_MESSAGES = {"你好", "您好", "谢谢", "感谢", "确认", "取消", "ok", "OK", "是的", "好的"}
 
 _GOAL_PATTERNS = (

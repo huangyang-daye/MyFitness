@@ -29,6 +29,7 @@ def db_session():
 def test_should_stream_summary_excludes_fixed_intents():
     assert not should_stream_summary(Intent.MANUAL_ENTRY)
     assert not should_stream_summary(Intent.SYNC_TRIGGER)
+    assert not should_stream_summary(Intent.UNSUPPORTED)
     assert should_stream_summary(Intent.DATA_QUERY)
 
 

@@ -12,7 +12,7 @@ from myfitness.db.models import KnowledgeEntry, User
 from myfitness.db.repositories.knowledge import KnowledgeRepository
 from myfitness.memory.profile import extract_profile_facts, merge_profile, profile_to_markdown
 from myfitness.memory.types import PROFILE_TITLE
-from myfitness.rag.knowledge_service import index_knowledge_entry
+from myfitness.memory.vector_jobs import schedule_memory_index
 from myfitness.schemas.state import Intent
 
 logger = logging.getLogger(__name__)
@@ -66,9 +66,9 @@ def _upsert_knowledge(session: Session, user_id: int, content: str) -> Knowledge
     repo = KnowledgeRepository(session, user_id)
     entry = repo.upsert_memory(PROFILE_TITLE, content)
     try:
-        index_knowledge_entry(session, user_id, entry)
-    except Exception as exc:  # noqa: BLE001 - 向量索引失败仍保留知识库文本
-        logger.warning("长期记忆写入知识库成功，但向量索引跳过: %s", exc)
+        schedule_memory_index(user_id, PROFILE_TITLE, content)
+    except Exception as exc:  # noqa: BLE001 - 投递失败不影响画像落库
+        logger.warning("长期记忆已写入知识库，向量索引任务投递失败: %s", exc)
     return entry
 
 

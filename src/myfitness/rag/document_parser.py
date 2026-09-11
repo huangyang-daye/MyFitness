@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import ClassVar
 
 from myfitness.rag.knowledge_service import MAX_CONTENT_LEN, MAX_TITLE_LEN
+
+logger = logging.getLogger(__name__)
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
 SUPPORTED_EXTENSIONS = {
@@ -55,7 +58,7 @@ def parse_document(filename: str, data: bytes) -> ParsedDocument:
 
     fmt = detect_format(safe_name, data)
     if fmt == "pdf":
-        text = _parse_pdf(data)
+        text = _parse_pdf(data, filename=safe_name)
     elif fmt == "docx":
         text = _parse_docx(data)
     elif fmt == "doc":
@@ -125,7 +128,12 @@ def _title_from_filename(filename: str) -> str:
 
 def _normalize_content(text: str) -> tuple[str, bool]:
     cleaned = text.replace("\x00", "")
+    # 笔记类 PDF 常把康熙/部首字形嵌进正文（⻣+骨），先去掉再 NFKC
+    radical_count = len(re.findall(r"[\u2e80-\u2fdf]", cleaned))
+    cleaned = re.sub(r"[\u2e80-\u2fdf]", "", cleaned)
     cleaned = unicodedata.normalize("NFKC", cleaned)
+    # 假粗体叠字；部首很多时折叠所有连续相同汉字（足足→足）
+    cleaned = _collapse_doubled_cjk(cleaned, aggressive=radical_count >= 50)
     cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
@@ -133,6 +141,23 @@ def _normalize_content(text: str) -> tuple[str, bool]:
     if truncated:
         cleaned = cleaned[:MAX_CONTENT_LEN].rstrip()
     return cleaned, truncated
+
+
+def _collapse_doubled_cjk(text: str, *, aggressive: bool = False) -> str:
+    """折叠假粗体造成的连续相同汉字。
+
+    默认要求至少 3 组「字字」才折叠，保留「明明 / 慢慢 / 浩浩荡荡」；
+    aggressive 时折叠所有连续相同汉字（扫描笔记假粗体）。
+    """
+    if aggressive:
+        return re.sub(r"([\u4e00-\u9fff])\1+", r"\1", text)
+
+    pattern = re.compile(r"(?:([\u4e00-\u9fff])\1){3,}")
+
+    def _repl(match: re.Match[str]) -> str:
+        return match.group(0)[::2]
+
+    return pattern.sub(_repl, text)
 
 
 def _decode_text(data: bytes) -> str:
@@ -144,7 +169,105 @@ def _decode_text(data: bytes) -> str:
     return data.decode("latin-1", errors="replace")
 
 
-def _parse_pdf(data: bytes) -> str:
+def parse_pdf_with_coordinates(data: bytes) -> str:
+    """使用 PyMuPDF 的坐标信息进行段落合并，返回纯文本。"""
+    try:
+        import fitz  # PyMuPDF
+    except ImportError as exc:
+        raise DocumentParseError("坐标解析 PDF 需要安装 pymupdf") from exc
+    doc = fitz.open(stream=data, filetype="pdf")
+    full_text = []
+    for page_num, page in enumerate(doc, start=1):
+        # 获取页面所有文本块
+        blocks = page.get_text("dict")["blocks"]
+        page_lines = []
+
+        # 1. 从 spans 中提取行（按 y0 坐标聚类）
+        for b in blocks:
+            if "lines" not in b:
+                continue
+            for line in b["lines"]:
+                spans = line["spans"]
+                if not spans:
+                    continue
+                # 同一行内所有 span 按 x0 排序后拼接
+                spans.sort(key=lambda s: s["origin"][0])
+                # 注意：span 自带文本，可能包含空格，需要合理拼接
+                line_text = ""
+                for index, span in enumerate(spans):
+                    # 若前一个 span 末尾与当前 span 开头之间距离过大，补空格
+                    if (
+                        line_text
+                        and index > 0
+                        and span["bbox"][0] - spans[index - 1]["bbox"][2] > 2
+                    ):
+                        line_text += " "
+                    line_text += span["text"]
+                y0 = line["bbox"][1]  # 行的纵坐标
+                page_lines.append((y0, line_text))
+
+        # 2. 按 y0 排序（从上到下）
+        page_lines.sort(key=lambda x: x[0])
+
+        # 3. 将行合并为段落（依据垂直间距）
+        paragraphs = []
+        if page_lines:
+            current_para = [page_lines[0][1]]
+            prev_y = page_lines[0][0]
+            for y, text in page_lines[1:]:
+                gap = y - prev_y
+                # 若行间距超过阈值（经验值，单位点为磅），则视为新段落
+                if gap > 8:  # 8 points，可根据实际情况调整
+                    paragraphs.append(" ".join(current_para))
+                    current_para = [text]
+                else:
+                    # 同一段落：检查是否需要空格连接（按你的 _join_pdf_soft_wrap 逻辑）
+                    last = current_para[-1]
+                    if last and text:
+                        # 可复用你的 _join_pdf_soft_wrap 函数
+                        joined = _join_pdf_soft_wrap(last, text)
+                        current_para[-1] = joined
+                    else:
+                        current_para.append(text)
+                prev_y = y
+            if current_para:
+                paragraphs.append(" ".join(current_para))
+
+        full_text.append("\n\n".join(paragraphs))
+    doc.close()
+    return "\n\n".join(full_text)
+
+def _parse_pdf(data: bytes, *, filename: str = "document.pdf") -> str:
+    """PDF 默认走 MinerU；失败时可按配置回退 pypdf。"""
+    from myfitness.config import get_settings
+
+    settings = get_settings()
+    parser = (settings.pdf_parser or "mineru").strip().lower()
+    if parser not in {"mineru", "pypdf"}:
+        raise DocumentParseError("PDF_PARSER 须为 mineru 或 pypdf")
+
+    if parser == "mineru":
+        try:
+            from myfitness.rag.mineru_pdf import MinerUParseError, parse_pdf_with_mineru
+
+            text = parse_pdf_with_mineru(data, filename=filename, settings=settings)
+            if text.strip():
+                # MinerU 已输出段落化 Markdown，不再做版面折行重排，避免叠词
+                return text
+            raise MinerUParseError("MinerU 返回空文本")
+        except Exception as exc:  # noqa: BLE001
+            if not settings.mineru_fallback_pypdf:
+                message = str(exc).strip() or "MinerU 解析失败"
+                raise DocumentParseError(message) from exc
+            logger.warning("MinerU 解析失败，回退 pypdf：%s", exc)
+
+    try:
+        return _reflow_pdf_text(parse_pdf_with_coordinates(data))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PyMuPDF 坐标解析失败，回退 pypdf：%s", exc)
+        return _reflow_pdf_text(_parse_pdf_pypdf(data))
+
+def _parse_pdf_pypdf(data: bytes) -> str:
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -163,6 +286,112 @@ def _parse_pdf(data: bytes) -> str:
         if text:
             pages.append(f"## 第 {index} 页\n\n{text}")
     return "\n\n".join(pages)
+
+
+_PDF_SENTENCE_END = re.compile(r"[。！？；….!?;:：」』”’）)\]】]$")
+_PDF_STRUCTURAL_LINE = re.compile(
+    r"^(?:"
+    r"#{1,6}\s+"  # markdown 标题
+    r"|第\s*\d+\s*页\s*$"
+    r"|[-*●•]\s+"  # 无序列表
+    r"|\d+[.)、．]\s+"  # 有序列表
+    r"|[（(]?[一二三四五六七八九十百千]+[）)]、\s*"
+    r"|第[一二三四五六七八九十百千0-9]+[章节篇部分条款]\s*"
+    r"|!\[|"  # 图片
+    r"\|.+\|"  # 表格行
+    r")"
+)
+_CJK_CHAR = re.compile(r"[\u4e00-\u9fff]")
+_LATIN_WORD = re.compile(r"[A-Za-z0-9]")
+
+
+def _reflow_pdf_text(text: str) -> str:
+    """把 PDF 版面折行拼回段落，保留空行分段与标题/列表结构。"""
+    if not text or "\n" not in text:
+        return text
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    blocks = re.split(r"\n{2,}", normalized)
+    reflowed = [_reflow_pdf_block(block) for block in blocks]
+    return "\n\n".join(part for part in reflowed if part.strip())
+
+
+def _reflow_pdf_block(block: str) -> str:
+    lines = [line.rstrip() for line in block.split("\n")]
+    lines = [line for line in lines if line.strip()]
+    if len(lines) <= 1:
+        return "\n".join(lines)
+
+    merged: list[str] = [lines[0]]
+    for nxt in lines[1:]:
+        prev = merged[-1]
+        if _should_keep_pdf_linebreak(prev, nxt):
+            merged.append(nxt)
+        else:
+            merged[-1] = _join_pdf_soft_wrap(prev, nxt)
+    return "\n".join(merged)
+
+
+def _should_keep_pdf_linebreak(prev: str, nxt: str) -> bool:
+    prev_s = prev.strip()
+    nxt_s = nxt.strip()
+    if not prev_s or not nxt_s:
+        return True
+    if _PDF_STRUCTURAL_LINE.match(prev_s) or _PDF_STRUCTURAL_LINE.match(nxt_s):
+        return True
+    # 上一行已收束，视为段落边界，保留换行
+    if _PDF_SENTENCE_END.search(prev_s):
+        return True
+    return False
+
+
+def _join_pdf_soft_wrap(prev: str, nxt: str) -> str:
+    left = prev.rstrip()
+    right = nxt.lstrip()
+    # Unicode 软连字符去掉；普通 "-" 保留（anti-inflammatory）
+    if left.endswith("­"):
+        left = left[:-1]
+    # 折行重叠：上一行末尾与下一行开头重复（需要提升 + 提升体重 → 需要提升体重）
+    overlap = _soft_wrap_overlap(left, right)
+    if overlap:
+        right = right[overlap:]
+        if not right:
+            return left
+    left_tail = left[-1:] if left else ""
+    right_head = right[:1] if right else ""
+    # 两侧都是拉丁字符时补空格；中文或标点相邻直接拼接
+    need_space = bool(
+        _LATIN_WORD.match(left_tail)
+        and _LATIN_WORD.match(right_head)
+        and not left.endswith(("(", "[", "{", "/", "\\", "-"))
+    )
+    if need_space:
+        return f"{left} {right}"
+    # 避免中文折行中间插入空格；CJK 互拼不加空格
+    if _CJK_CHAR.match(left_tail) or _CJK_CHAR.match(right_head):
+        return left + right
+    if left_tail.isspace() or right_head.isspace():
+        return left + right
+    if left_tail in '-([{（【「『“"\'' or right_head in ')]}）】」』”"\'，,、。.!?;:：；':
+        return left + right
+    if _LATIN_WORD.match(left_tail) or _LATIN_WORD.match(right_head):
+        return f"{left} {right}"
+    return left + right
+
+
+def _soft_wrap_overlap(left: str, right: str) -> int:
+    """下一行若重复上一行末尾片段，返回应去掉的前缀长度。"""
+    if not left or not right:
+        return 0
+    max_k = min(len(left), len(right), 16)
+    for k in range(max_k, 0, -1):
+        if left.endswith(right[:k]):
+            # 单字重叠仅在两侧都是 CJK 时采纳，降低误伤
+            if k == 1 and not (
+                _CJK_CHAR.match(left[-1]) and _CJK_CHAR.match(right[0])
+            ):
+                continue
+            return k
+    return 0
 
 
 def _parse_docx(data: bytes) -> str:

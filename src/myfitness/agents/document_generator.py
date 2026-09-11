@@ -35,8 +35,14 @@ def build_document_messages(
     context: ContextSnapshot | None,
     *,
     output_format: str = "md",
+    source_content: str | None = None,
 ) -> list[dict[str, str]]:
     parts = [f"用户诉求：{user_message.strip()}"]
+    if source_content and source_content.strip():
+        parts.append(
+            "【待整理的上一轮分析 — 以此为报告主体，保留结论与建议，不要改变原意】\n"
+            + source_content.strip()
+        )
 
     outputs = agent_outputs or AgentOutputs()
     if outputs.body and outputs.body.narrative:
@@ -65,6 +71,8 @@ def build_document_messages(
         parts.append(
             "【上下文反思 — 已从数据库确认的个体事实】\n" + context.reflection_notes.strip()
         )
+    if context and context.memory_episodic.strip():
+        parts.append("【历史情景摘要】\n" + context.memory_episodic.strip())
     if context and context.memory_short_term.strip():
         parts.append("【本轮会话要点】\n" + context.memory_short_term.strip())
     if context and context.data_gaps:
@@ -110,6 +118,7 @@ def generate_document_body(
     *,
     fallback: str = "",
     output_format: str = "md",
+    source_content: str | None = None,
 ) -> str:
     """生成文档正文；docx 返回 JSON，md/pdf 返回 Markdown。"""
     fmt = output_format.strip().lower()
@@ -123,6 +132,7 @@ def generate_document_body(
                 agent_outputs,
                 context,
                 output_format=fmt,
+                source_content=source_content,
             )
             content = chat_completion(messages, temperature=0.3)
             if content.strip():
@@ -137,11 +147,24 @@ def generate_document_body(
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM 文档生成失败，使用规则兜底: %s", exc)
 
-    return _rule_based_document_body(user_message, agent_outputs, context, fallback, output_format=fmt)
+    return _rule_based_document_body(
+        user_message,
+        agent_outputs,
+        context,
+        fallback,
+        output_format=fmt,
+        source_content=source_content,
+    )
 
 
 def infer_document_title(user_message: str) -> str:
     text = user_message.strip()
+    if re.search(r"训练|健身|锻炼", text) and "报告" in text:
+        return "训练分析报告"
+    if re.search(r"饮食|营养|餐", text) and "报告" in text:
+        return "饮食营养报告"
+    if re.search(r"身体|体重|体脂", text) and "报告" in text:
+        return "身体数据报告"
     if re.search(r"饮食|营养|餐|碳水|蛋白|脂肪|食堂", text):
         return "饮食规划"
     if re.search(r"训练|健身|锻炼|计划", text):
@@ -158,8 +181,10 @@ def _rule_based_document_body(
     fallback: str,
     *,
     output_format: str = "md",
+    source_content: str | None = None,
 ) -> str:
     title = infer_document_title(user_message)
+    source = _strip_chat_artifacts(source_content or "")
     if output_format == "docx":
         blocks: list[dict] = [
             {"type": "title", "text": title},
@@ -167,28 +192,39 @@ def _rule_based_document_body(
             {"type": "paragraph", "text": user_message.strip()},
         ]
         outputs = agent_outputs or AgentOutputs()
-        if outputs.body and outputs.body.narrative:
+        if source:
+            blocks.extend(
+                [
+                    {"type": "heading", "level": 2, "text": "分析与建议"},
+                    {"type": "paragraph", "text": source},
+                ]
+            )
+        elif outputs.body and outputs.body.narrative:
             blocks.extend(
                 [
                     {"type": "heading", "level": 2, "text": "身体数据与建议"},
                     {"type": "paragraph", "text": outputs.body.narrative},
                 ]
             )
-        if outputs.nutrition and outputs.nutrition.narrative:
+        if not source and outputs.nutrition and outputs.nutrition.narrative:
             blocks.extend(
                 [
                     {"type": "heading", "level": 2, "text": "饮食建议"},
                     {"type": "paragraph", "text": outputs.nutrition.narrative},
                 ]
             )
-        if outputs.fitness and outputs.fitness.narrative:
+        if not source and outputs.fitness and outputs.fitness.narrative:
             blocks.extend(
                 [
                     {"type": "heading", "level": 2, "text": "训练建议"},
                     {"type": "paragraph", "text": outputs.fitness.narrative},
                 ]
             )
-        if not (outputs.body or outputs.nutrition or outputs.fitness) and fallback.strip():
+        if (
+            not source
+            and not (outputs.body or outputs.nutrition or outputs.fitness)
+            and fallback.strip()
+        ):
             cleaned = _strip_chat_artifacts(fallback)
             if cleaned:
                 blocks.extend(
@@ -202,19 +238,29 @@ def _rule_based_document_body(
     sections = [f"# {title}", "", f"## 诉求摘要\n\n{user_message.strip()}"]
 
     outputs = agent_outputs or AgentOutputs()
-    if outputs.body and outputs.body.narrative:
+    if source:
+        sections.extend(["", "## 分析与建议", "", source])
+    elif outputs.body and outputs.body.narrative:
         sections.extend(["", "## 身体数据与建议", "", outputs.body.narrative])
-    if outputs.nutrition and outputs.nutrition.narrative:
+    if not source and outputs.nutrition and outputs.nutrition.narrative:
         sections.extend(["", "## 饮食建议", "", outputs.nutrition.narrative])
-    if outputs.fitness and outputs.fitness.narrative:
+    if not source and outputs.fitness and outputs.fitness.narrative:
         sections.extend(["", "## 训练建议", "", outputs.fitness.narrative])
 
-    if not (outputs.body or outputs.nutrition or outputs.fitness) and fallback.strip():
+    if (
+        not source
+        and not (outputs.body or outputs.nutrition or outputs.fitness)
+        and fallback.strip()
+    ):
         cleaned = _strip_chat_artifacts(fallback)
         if cleaned:
             sections.extend(["", cleaned])
 
-    if context and not (outputs.body or outputs.nutrition or outputs.fitness):
+    if (
+        context
+        and not source
+        and not (outputs.body or outputs.nutrition or outputs.fitness)
+    ):
         draft = build_rule_based_summary(
             outputs,
             context,

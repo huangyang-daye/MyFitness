@@ -1,36 +1,47 @@
-"""短期记忆 — 保留最近若干轮，把更早的对话压缩进 session_memory。"""
+"""工作记忆窗口 — 保留最近若干轮，溢出部分交给情景记忆层。"""
 
 from __future__ import annotations
 
 from myfitness.config import get_settings
-from myfitness.memory.compress import compress_dialogue, format_messages
-from myfitness.schemas.state import MyFitnessGraphState
+from myfitness.memory.compress import clip_text, compress_dialogue
+from myfitness.memory.working import format_working_text
+from myfitness.schemas.state import ChatMessage, MyFitnessGraphState
+
+
+def split_working_window(
+    messages: list[ChatMessage],
+    compacted_count: int,
+    keep: int,
+) -> tuple[list[ChatMessage], list[ChatMessage], int]:
+    """返回 (overflow, recent, new_compacted_count)。"""
+    compacted = max(0, min(compacted_count, len(messages)))
+    overflow_end = max(compacted, len(messages) - keep)
+    if overflow_end <= compacted:
+        recent = messages[-keep:] if messages else []
+        return [], recent, compacted
+    overflow = messages[compacted:overflow_end]
+    recent = messages[-keep:] if messages else []
+    return overflow, recent, overflow_end
 
 
 def build_short_term(state: MyFitnessGraphState, *, use_llm: bool = True) -> tuple[str, bool]:
-    """更新 state.session_memory，返回注入 Prompt 的短期记忆文本。"""
+    """无数据库时的工作记忆窗口：压缩溢出到 session_memory，返回最近对话文本。"""
     settings = get_settings()
-    keep = settings.memory_short_term_turns
-    messages = list(state.messages)
-    compacted = max(0, min(state.memory_compacted_count, len(messages)))
-    compressed = False
-
-    overflow_end = len(messages) - keep
-    if overflow_end > compacted:
-        overflow = messages[compacted:overflow_end]
-        state.session_memory = compress_dialogue(
+    overflow, recent, new_compacted = split_working_window(
+        list(state.messages),
+        state.memory_compacted_count,
+        settings.memory_short_term_turns,
+    )
+    compressed = bool(overflow)
+    if compressed:
+        batch = compress_dialogue(
             overflow,
-            prior_summary=state.session_memory,
+            prior_summary="",
             max_chars=settings.memory_compress_chars,
             use_llm=use_llm,
-        )
-        state.memory_compacted_count = overflow_end
-        compressed = True
-
-    recent = messages[-keep:] if messages else []
-    parts: list[str] = []
-    if state.session_memory.strip():
-        parts.append("较早对话摘要：\n" + state.session_memory.strip())
-    if recent:
-        parts.append("最近对话：\n" + format_messages(recent, max_chars=3000))
-    return "\n\n".join(parts).strip(), compressed
+        ).strip()
+        if batch:
+            merged = "\n".join(part for part in (state.session_memory.strip(), batch) if part)
+            state.session_memory = clip_text(merged, settings.memory_compress_chars)
+        state.memory_compacted_count = new_compacted
+    return format_working_text(recent), compressed

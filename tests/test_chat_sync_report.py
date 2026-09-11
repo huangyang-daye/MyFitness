@@ -1,6 +1,6 @@
 """对话链路的同步日期与「同步+日报」组合意图测试。"""
 
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from myfitness.db.models import Base, User
 from myfitness.graph.chat import new_chat_state, run_chat_turn
+from myfitness.schemas.state import ChatMessage, Intent
 
 
 @pytest.fixture
@@ -162,8 +163,8 @@ def test_chat_report_uses_route_date(db_session):
     assert "2026-08-21" in state.reply
 
 
-def test_chat_report_without_date_asks_for_date_then_generates(db_session):
-    """「生成日报」未指明日期时先追问，用户补日期后再生成。"""
+def test_chat_report_without_context_asks_for_date_then_generates(db_session):
+    """没有可继承的分析上下文时先追问，用户补日期后再生成。"""
     state = new_chat_state(user_id=1)
     with (
         patch("myfitness.graph.chat.is_llm_configured", return_value=False),
@@ -175,7 +176,7 @@ def test_chat_report_without_date_asks_for_date_then_generates(db_session):
             "content_md": "# MyFitness 日报 — 2026-08-24",
         }
 
-        state = run_chat_turn(db_session, state, "生成日报")
+        state = run_chat_turn(db_session, state, "生成报告")
 
         report_mock.assert_not_called()
         assert state.pending_confirmation is not None
@@ -188,6 +189,133 @@ def test_chat_report_without_date_asks_for_date_then_generates(db_session):
     assert report_mock.call_args.kwargs["report_date"] == date(2026, 8, 24)
     assert state.pending_confirmation is None
     assert "2026-08-24" in state.reply
+
+
+@pytest.mark.parametrize(
+    "followup",
+    ["生成报告", "根据对话记录生成报告", "整理成报告"],
+)
+def test_chat_contextual_report_exports_previous_analysis(db_session, followup):
+    """分析/建议后的模糊报告指令应导出上一轮内容，而不是追问日报日期。"""
+    previous_reply = "根据最近训练记录，建议下周降低深蹲总量并增加一天恢复。"
+    state = new_chat_state(user_id=1)
+    state.intent = Intent.TREND_ANALYSIS
+    state.intent_domain = "fitness"
+    state.messages = [
+        ChatMessage(role="user", content="根据最近的训练记录，给我一些训练建议"),
+        ChatMessage(role="assistant", content=previous_reply),
+    ]
+
+    with (
+        patch("myfitness.graph.chat.is_llm_configured", return_value=False),
+        patch("myfitness.graph.chat.apply_document_export") as export_mock,
+        patch("myfitness.graph.chat.run_daily_report") as daily_mock,
+        patch("myfitness.graph.chat.run_period_report") as period_mock,
+    ):
+        export_mock.return_value = {
+            "document_only": True,
+            "exports": [
+                {
+                    "path": "/tmp/训练分析报告.md",
+                    "filename": "训练分析报告.md",
+                    "format": "md",
+                }
+            ],
+        }
+        state = run_chat_turn(db_session, state, followup)
+
+    export_mock.assert_called_once()
+    assert export_mock.call_args.kwargs["source_content"] == previous_reply
+    assert "上一轮用户诉求：根据最近的训练记录" in export_mock.call_args.args[2]
+    daily_mock.assert_not_called()
+    period_mock.assert_not_called()
+    assert state.pending_confirmation is None
+    assert state.messages[-1].artifacts[0].kind == "document"
+    assert "训练分析报告" in state.reply
+
+
+def test_chat_contextual_report_does_not_inherit_unrelated_turn(db_session):
+    """普通闲聊后的“生成报告”仍应追问日期，不能导出无关内容。"""
+    state = new_chat_state(user_id=1)
+    state.intent = Intent.GENERAL
+    state.messages = [
+        ChatMessage(role="user", content="你好"),
+        ChatMessage(role="assistant", content="你好，有什么可以帮你？"),
+    ]
+
+    with (
+        patch("myfitness.graph.chat.is_llm_configured", return_value=False),
+        patch("myfitness.graph.chat.apply_document_export") as export_mock,
+    ):
+        state = run_chat_turn(db_session, state, "生成报告")
+
+    export_mock.assert_not_called()
+    assert state.pending_confirmation is not None
+    assert state.pending_confirmation.action_type == "report_date_clarification"
+
+
+def test_chat_explicit_period_report_ignores_previous_analysis(db_session):
+    """显式日期范围始终走周期报表，不应被跨轮导出分支截获。"""
+    today = date.today()
+    start = today - timedelta(days=6)
+    state = new_chat_state(user_id=1)
+    state.intent = Intent.TREND_ANALYSIS
+    state.intent_domain = "fitness"
+    state.messages = [
+        ChatMessage(role="user", content="分析最近的训练并给建议"),
+        ChatMessage(role="assistant", content="建议安排恢复周。"),
+    ]
+
+    with (
+        patch("myfitness.graph.chat.is_llm_configured", return_value=False),
+        patch("myfitness.graph.chat.apply_document_export") as export_mock,
+        patch("myfitness.graph.chat.run_period_report") as period_mock,
+    ):
+        period_mock.return_value = {
+            "report_kind": "period",
+            "period_start": start.isoformat(),
+            "period_end": today.isoformat(),
+            "period_days": 7,
+            "file_path": "/tmp/period.md",
+            "content_md": "# 周期报告",
+        }
+        state = run_chat_turn(db_session, state, "生成最近一周报告")
+
+    export_mock.assert_not_called()
+    period_mock.assert_called_once()
+    assert period_mock.call_args.kwargs["start_date"] == start
+    assert period_mock.call_args.kwargs["end_date"] == today
+    assert state.pending_confirmation is None
+
+
+def test_chat_report_clarification_accepts_recent_week(db_session):
+    """追问日期后回复「最近一周」应生成近 7 天周期报告，而不是继续追问。"""
+    state = new_chat_state(user_id=1)
+    today = date.today()
+    expected_start = today - timedelta(days=6)
+    with (
+        patch("myfitness.graph.chat.is_llm_configured", return_value=False),
+        patch("myfitness.graph.chat.run_period_report") as period_mock,
+    ):
+        period_mock.return_value = {
+            "report_date": expected_start.isoformat(),
+            "start_date": expected_start.isoformat(),
+            "end_date": today.isoformat(),
+            "file_path": "/tmp/period.md",
+            "content_md": "# 周期报告",
+        }
+
+        state = run_chat_turn(db_session, state, "生成报告")
+        assert state.pending_confirmation is not None
+        assert state.pending_confirmation.action_type == "report_date_clarification"
+
+        state = run_chat_turn(db_session, state, "最近一周")
+
+    assert state.pending_confirmation is None
+    period_mock.assert_called_once()
+    assert period_mock.call_args.kwargs["start_date"] == expected_start
+    assert period_mock.call_args.kwargs["end_date"] == today
+    assert "周期报告" in state.reply or expected_start.isoformat() in state.reply or "已生成" in state.reply
 
 
 def test_chat_sync_and_report_without_date_asks_before_running(db_session):

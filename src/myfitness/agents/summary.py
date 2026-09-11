@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from myfitness.agents.tools.query_format import format_query_results
 from myfitness.agents.tools.web_search import format_web_search_results
 from myfitness.debug import trace_agent
+from myfitness.graph.refusal import UNSUPPORTED_REPLY
 from myfitness.llm.factory import is_llm_configured, stream_chat_completion
 from myfitness.rag.format import format_retrieved_chunks
 from myfitness.rag.schemas import RetrievedChunk
@@ -70,6 +71,9 @@ def build_rule_based_summary(
     include_query_results=False 时不附「数据库查询结果」段——周期报表已有
     每日明细表 / 趋势图，避免重复罗列。
     """
+    if intent == Intent.UNSUPPORTED:
+        return UNSUPPORTED_REPLY
+
     sections: list[str] = []
     data_notes = list(context.data_gaps) if context else []
 
@@ -191,6 +195,7 @@ def should_stream_summary(intent: Intent, user_message: str = "") -> bool:
         Intent.MANUAL_ENTRY,
         Intent.CONFIRMATION_RESPONSE,
         Intent.SYNC_TRIGGER,
+        Intent.UNSUPPORTED,
     }
 
 
@@ -282,6 +287,8 @@ def _format_memory(context: ContextSnapshot | None) -> str:
             "【用户画像 / 长期记忆 — 回答时保持一致，不要编造画像中没有的事实】\n"
             + context.memory_long_term.strip()
         )
+    if context.memory_episodic.strip():
+        parts.append("【情景记忆 / 历史对话摘要】\n" + context.memory_episodic.strip())
     if context.memory_short_term.strip():
-        parts.append("【本轮会话记忆】\n" + context.memory_short_term.strip())
+        parts.append("【工作记忆 / 当前会话】\n" + context.memory_short_term.strip())
     return "\n\n".join(parts)

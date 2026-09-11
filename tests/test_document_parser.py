@@ -1,12 +1,14 @@
 """知识库文档解析测试。"""
 
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 
 from myfitness.api.web import parse_multipart_file
-from myfitness.rag.document_parser import DocumentParseError, parse_document
+from myfitness.rag.document_parser import DocumentParseError, _reflow_pdf_text, parse_document
 from myfitness.rag.knowledge_service import MAX_CONTENT_LEN
+from myfitness.rag import mineru_pdf
 
 
 def test_parse_markdown():
@@ -59,20 +61,130 @@ def test_parse_docx():
     assert "深蹲" in parsed.content
 
 
-def test_parse_pdf(monkeypatch):
+def test_parse_pdf_uses_mineru(monkeypatch):
+    monkeypatch.setattr(
+        "myfitness.rag.mineru_pdf.parse_pdf_with_mineru",
+        lambda data, filename="document.pdf", settings=None: "## 第 1 页\n\n蛋白质每公斤体重 1.6g",
+    )
+    monkeypatch.setattr(
+        "myfitness.config.get_settings",
+        lambda: SimpleNamespace(
+            pdf_parser="mineru",
+            mineru_fallback_pypdf=False,
+        ),
+    )
+    parsed = parse_document("plan.pdf", b"%PDF-1.4 fake-body")
+    assert parsed.format == "pdf"
+    assert "1.6g" in parsed.content
+    assert "第 1 页" in parsed.content
+
+
+def test_parse_pdf_falls_back_to_pypdf(monkeypatch):
     class FakePage:
         def extract_text(self) -> str:
-            return "蛋白质每公斤体重 1.6g"
+            return (
+                "蛋白质摄入建议为每公斤\n"
+                "体重 1.6 到 2.2 克，并在训练后\n"
+                "及时补充。\n"
+                "力量训练每周至少三次。"
+            )
 
     class FakeReader:
         def __init__(self, _stream) -> None:
             self.pages = [FakePage()]
 
+    def boom(*_args, **_kwargs):
+        raise mineru_pdf.MinerUParseError("mineru unavailable")
+
+    monkeypatch.setattr("myfitness.rag.mineru_pdf.parse_pdf_with_mineru", boom)
     monkeypatch.setattr("pypdf.PdfReader", FakeReader)
+    monkeypatch.setattr(
+        "myfitness.config.get_settings",
+        lambda: SimpleNamespace(
+            pdf_parser="mineru",
+            mineru_fallback_pypdf=True,
+        ),
+    )
     parsed = parse_document("plan.pdf", b"%PDF-1.4 fake-body")
     assert parsed.format == "pdf"
-    assert "1.6g" in parsed.content
     assert "第 1 页" in parsed.content
+    assert "每公斤体重 1.6 到 2.2 克" in parsed.content
+    assert "训练后及时补充。" in parsed.content
+    # 句号后保留分段，不把下一段硬拼上
+    assert "补充。\n力量训练每周至少三次。" in parsed.content
+
+
+def test_reflow_pdf_text_joins_soft_wraps_keeps_structure():
+    raw = (
+        "## 第 1 页\n\n"
+        "减脂期应保证充足的\n"
+        "蛋白质摄入，避免肌肉\n"
+        "流失。\n\n"
+        "- 早餐鸡蛋\n"
+        "- 午餐鸡胸\n\n"
+        "Weekly protein target is 1.6\n"
+        "to 2.2 grams per kilogram."
+    )
+    text = _reflow_pdf_text(raw)
+    assert "充足的蛋白质摄入，避免肌肉流失。" in text
+    assert "- 早餐鸡蛋\n- 午餐鸡胸" in text
+    assert "1.6 to 2.2 grams" in text
+    assert "## 第 1 页" in text
+
+
+def test_collapse_doubled_cjk_from_fake_bold():
+    from myfitness.rag.document_parser import _collapse_doubled_cjk, _normalize_content
+
+    # 假粗体叠字：至少 3 组才折叠
+    assert _collapse_doubled_cjk("疼疼痛痛是是常见") == "疼痛是常见"
+    # 保留正常叠词
+    assert _collapse_doubled_cjk("明明可以慢慢来") == "明明可以慢慢来"
+    assert _collapse_doubled_cjk("浩浩荡荡") == "浩浩荡荡"
+    assert _collapse_doubled_cjk("小小腿前侧", aggressive=True) == "小腿前侧"
+    # 含大量部首的笔记：去部首 + 积极折叠
+    raw = ("⻣" * 60) + "足足踝关节小小腿胫⻣骨舟舟⻣骨"
+    cleaned, _ = _normalize_content(raw)
+    assert "足足" not in cleaned
+    assert "小小" not in cleaned
+    assert "⻣" not in cleaned
+    assert "足踝关节" in cleaned
+    assert "小腿" in cleaned
+    assert "胫骨" in cleaned
+    assert "舟骨" in cleaned
+    # 普通文本仍保留「明明」
+    plain, _ = _normalize_content("明明可以慢慢来")
+    assert "明明可以慢慢来" in plain
+
+
+def test_soft_wrap_overlap_strips_repeated_tail():
+    from myfitness.rag.document_parser import _join_pdf_soft_wrap
+
+    assert _join_pdf_soft_wrap("需要提升", "提升体重") == "需要提升体重"
+
+
+def test_parse_pdf_mineru_required_raises(monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise mineru_pdf.MinerUParseError("未找到 MinerU")
+
+    monkeypatch.setattr("myfitness.rag.mineru_pdf.parse_pdf_with_mineru", boom)
+    monkeypatch.setattr(
+        "myfitness.config.get_settings",
+        lambda: SimpleNamespace(
+            pdf_parser="mineru",
+            mineru_fallback_pypdf=False,
+        ),
+    )
+    with pytest.raises(DocumentParseError, match="MinerU"):
+        parse_document("plan.pdf", b"%PDF-1.4 fake-body")
+
+
+def test_collect_markdown_prefers_main_doc(tmp_path):
+    main = tmp_path / "doc" / "auto"
+    main.mkdir(parents=True)
+    (main / "doc.md").write_text("# 主文\n\n蛋白质", encoding="utf-8")
+    (main / "doc_content_list.md").write_text("[]", encoding="utf-8")
+    text = mineru_pdf._collect_markdown(tmp_path)
+    assert "蛋白质" in text
 
 
 def test_parse_legacy_doc_utf16():

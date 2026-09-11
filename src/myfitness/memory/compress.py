@@ -77,8 +77,12 @@ def _rule_compress(prior: str, transcript: str, max_chars: int) -> str:
     return _clip(merged, max_chars)
 
 
-def _clip(text: str, max_chars: int) -> str:
+def clip_text(text: str, max_chars: int) -> str:
     value = " ".join(text.split())
     if len(value) <= max_chars:
         return value
     return value[: max_chars - 1].rstrip() + "…"
+
+
+def _clip(text: str, max_chars: int) -> str:
+    return clip_text(text, max_chars)

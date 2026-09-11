@@ -44,6 +44,19 @@ def test_parse_single_date_variants():
     assert parse_single_date("生成日报", today, default=date(2026, 8, 22)) == date(2026, 8, 22)
 
 
+def test_parse_date_range_text_relative_week_and_day():
+    from myfitness.agents.tools.query_planner import parse_date_range_text
+
+    today = date(2026, 9, 9)
+    assert parse_date_range_text("最近一周", today) == (date(2026, 9, 3), today)
+    assert parse_date_range_text("最近一周的", today) == (date(2026, 9, 3), today)
+    assert parse_date_range_text("近一周", today) == (date(2026, 9, 3), today)
+    assert parse_date_range_text("上周", today) == (date(2026, 9, 3), today)
+    assert parse_date_range_text("昨天", today) == (date(2026, 9, 8), date(2026, 9, 8))
+    assert parse_date_range_text("今天", today) == (today, today)
+    assert parse_date_range_text("最近7天", today) == (date(2026, 9, 3), today)
+
+
 def test_parse_single_date_ignores_decimal_ratios():
     today = date(2026, 9, 1)
     assert parse_single_date("0.5倍体重脂肪", today) is None

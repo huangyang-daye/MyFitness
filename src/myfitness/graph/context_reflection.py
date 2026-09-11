@@ -143,7 +143,11 @@ def _llm_reflect(
         "query_results": context.query_results if context else {},
         "user_goals": context.user_goals if context else [],
         "agent_summaries": _agent_brief(execution),
-        "memory_excerpt": (context.memory_long_term[:600] if context else ""),
+        "memory_excerpt": (
+            ((context.memory_long_term or "") + "\n" + (context.memory_episodic or ""))[:600]
+            if context
+            else ""
+        ),
         "retrieved_excerpt": _retrieval_excerpt(context),
         "task_results": [item.to_dict() for item in execution.task_results],
     }

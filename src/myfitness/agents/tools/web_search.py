@@ -87,6 +87,7 @@ _SKIP_INTENTS = {
     Intent.SCHEDULE_MANAGE,
     Intent.REPORT_TRIGGER,
     Intent.CHART_TRIGGER,
+    Intent.UNSUPPORTED,
 }
 _GREETINGS = {"你好", "您好", "谢谢", "感谢", "在吗", "你能做什么"}
 _SEARCH_PREFIXES = (

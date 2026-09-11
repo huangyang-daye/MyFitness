@@ -13,6 +13,15 @@ from myfitness.graph.context_reflection import needs_personalized_context
 _RECENT_DAYS_RE = re.compile(r"最?\s*近\s*(\d+)\s*天")
 # 「最近N天 / 过去N天 / 前N天」——要求含数字，避免误吞「前天」
 _PAST_DAYS_RE = re.compile(r"(?:最?\s*近|过[去了]?|前)\s*(\d+)\s*天")
+# 「最近一周 / 近一周 / 过去一周 / 上周 / 本周」
+_RELATIVE_WEEK_RE = re.compile(
+    r"(?:最?\s*近|过[去了]?)\s*(?:一\s*)?(?:个\s*)?(?:周|星期|礼拜)|"
+    r"(?:上|这|本)\s*(?:一\s*)?(?:周|星期|礼拜)"
+)
+_RELATIVE_MONTH_RE = re.compile(
+    r"(?:最?\s*近|过[去了]?)\s*(?:一\s*)?(?:个\s*)?月|"
+    r"(?:上|这|本)\s*(?:一\s*)?(?:个\s*)?月"
+)
 _ISO_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 _CN_MD_RE = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日?")
 _DOT_MD_RE = re.compile(r"(?<!\d)([1-9]\d?)[./](\d{1,2})(?!\d)")
@@ -156,8 +165,10 @@ def parse_date_range_text(
     1. 显式日期区间（「8月20日到8月25日」「2026-08-20~2026-08-25」）；
     2. 多个离散日期（「8月20号和25号」）→ 取最早到最晚；
     3. 最近/过去/前 N 天 → 含今天的 N 天；
-    4. 单日（今天/昨天/8月24日）→ start == end；
-    5. 都没有 → (None, None)。
+    4. 最近一周 / 上周 / 本周 → 近 7 天（含今天）；
+    5. 最近一个月 / 本月 → 近 30 天（含今天）；
+    6. 单日（今天/昨天/8月24日）→ start == end；
+    7. 都没有 → (None, None)。
     """
     today = today or date.today()
     tokens = list(_iter_date_tokens(message, today))
@@ -175,6 +186,17 @@ def parse_date_range_text(
     if m := _PAST_DAYS_RE.search(message):
         days = max(int(m.group(1)), 1)
         return today - timedelta(days=days - 1), today
+
+    if _RELATIVE_WEEK_RE.search(message):
+        return today - timedelta(days=6), today
+
+    if _RELATIVE_MONTH_RE.search(message):
+        return today - timedelta(days=29), today
+
+    # 「昨天 / 今天 / 前天」不在 _iter_date_tokens 里，走单日解析
+    single = parse_single_date(message, today)
+    if single is not None:
+        return single, single
 
     return None, None
 

@@ -233,6 +233,25 @@ class ChatSession(Base):
     )
 
 
+class EpisodicMemory(Base):
+    """情景记忆 — 会话溢出对话的持久化摘要。"""
+
+    __tablename__ = "episodic_memories"
+    __table_args__ = (
+        UniqueConstraint("user_id", "session_id", "turn_end", name="uk_episode_span"),
+        Index("idx_episode_user_created", "user_id", "created_at"),
+        Index("idx_episode_user_session", "user_id", "session_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigIntPK, ForeignKey("users.id"), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    turn_start: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    turn_end: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
     __table_args__ = (Index("idx_msg_session", "session_id", "created_at"),)

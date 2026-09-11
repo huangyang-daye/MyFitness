@@ -21,8 +21,10 @@ USER_KIND = "user"
 
 @dataclass
 class MemoryBundle:
-    short_term: str = ""
-    long_term: str = ""
+    short_term: str = ""  # 工作记忆（当前会话热窗口）
+    episodic: str = ""  # 情景记忆（历史对话摘要）
+    long_term: str = ""  # 用户画像
     profile: dict[str, Any] = field(default_factory=dict)
     updated: bool = False
     compressed: bool = False
+    working_backend: str = "memory"  # redis | memory

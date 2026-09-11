@@ -3,7 +3,7 @@
 分类顺序：
 1. 待确认上下文的确认/取消匹配（无需 LLM）；
 2. LLM 意图识别 Agent（agents/intent_agent.py，受熔断守卫约束）；
-3. 关键词/正则规则兜底（支持多意图与日期解析）；
+3. 关键词/正则规则兜底（支持多意图、日期解析与无效意图拦截）；
 4. 默认 GENERAL。
 """
 
@@ -33,6 +33,68 @@ _PAST_DAYS_RE = re.compile(r"(?:过[去了]?|前)\s*(\d+)\s*天")
 _SCHEDULE_WORDS = ("定时", "每天", "每日", "自动")
 _SCHEDULE_ACTION_WORDS = ("日报", "同步", "任务", "报告")
 _LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+_IN_SCOPE_HINTS = (
+    "体重",
+    "体脂",
+    "围度",
+    "饮食",
+    "热量",
+    "蛋白",
+    "碳水",
+    "脂肪",
+    "训练",
+    "健身",
+    "减脂",
+    "增肌",
+    "卧推",
+    "深蹲",
+    "硬拉",
+    "训记",
+    "日报",
+    "晨报",
+    "卡路里",
+    "有氧",
+    "力量",
+    "鸡胸",
+    "HIIT",
+    "hiit",
+    "瑜伽",
+    "拉伸",
+    "营养",
+    "宏量",
+    "摄入",
+    "消耗",
+    "TDEE",
+    "tdee",
+    "BMI",
+    "bmi",
+    "体测",
+    "步数",
+    "配速",
+)
+_JAILBREAK_RE = re.compile(
+    r"(忽略|无视|忘记).{0,12}(之前|以上|上面|先前|全部).{0,12}(指令|提示|规则|设定)|"
+    r"ignore\s+(all\s+)?(previous|above|prior)\s+(instructions?|prompts?)|"
+    r"jailbreak|越狱|"
+    r"(开发者模式|developer\s*mode)|"
+    r"(输出|打印|泄露|透露).{0,8}(系统提示|system\s*prompt|隐藏提示)|"
+    r"(你现在是|扮演).{0,16}(DAN|dan模式)|"
+    r"pretend\s+you\s+are\s+not",
+    re.IGNORECASE,
+)
+_OFF_TOPIC_RE = re.compile(
+    r"(股票|炒股|股市|基金定投|期货|比特币|以太坊|加密货币|外汇|"
+    r"写代码|写程序|编程作业|leetcode|python\s*(作业|爬虫|脚本|代码)|"
+    r"写小说|写剧本|写诗|作词|"
+    r"总统大选|选举投票|"
+    r"算命|占卜|星座运势|"
+    r"入侵系统|黑客攻击|破解密码|"
+    r"怎么造炸弹|制作炸弹|制毒|"
+    r"(今天|明天|这周)天气|"
+    r"帮我写情书|"
+    r"开药方|处方药)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +196,9 @@ def classify_intent(
 def _reconcile(llm: RouteResult, keyword: RouteResult | None) -> RouteResult:
     """LLM 结果与关键词结果的调和。
 
+    - 关键词命中 unsupported（越狱/域外）→ 采用关键词，避免 LLM 放行；
+    - LLM 判为 unsupported 而关键词有明确业务意图 → 采用关键词（防误拒）；
+    - LLM 同时给出 unsupported 与有效意图 → 丢掉 unsupported；
     - LLM 判为 general 而关键词有明确命中 → 采用关键词（防 LLM 过度泛化）；
     - LLM 未提取到日期而关键词解析出了日期（同步/日报场景）→ 补齐日期；
     - LLM 解析出的日期范围比关键词**更窄**、关键词范围为其超集（如「昨天和今天」
@@ -141,6 +206,15 @@ def _reconcile(llm: RouteResult, keyword: RouteResult | None) -> RouteResult:
     - 其余情况信任 LLM。
     """
     if keyword is not None:
+        if keyword.has(Intent.UNSUPPORTED):
+            return keyword
+        if llm.has(Intent.UNSUPPORTED) and keyword.intent not in {
+            Intent.GENERAL,
+            Intent.UNSUPPORTED,
+        }:
+            return keyword
+        if llm.has(Intent.UNSUPPORTED) and len(llm.intents) > 1:
+            llm.intents = [item for item in llm.intents if item != Intent.UNSUPPORTED]
         if llm.intent == Intent.GENERAL and keyword.intent != Intent.GENERAL:
             return keyword
         if (
@@ -173,6 +247,8 @@ def _reconcile(llm: RouteResult, keyword: RouteResult | None) -> RouteResult:
         if handles_date_range and (llm_missed_date or keyword_is_wider):
             llm.start_date = keyword.start_date
             llm.end_date = keyword.end_date
+    if llm.has(Intent.UNSUPPORTED) and len(llm.intents) > 1:
+        llm.intents = [item for item in llm.intents if item != Intent.UNSUPPORTED]
     return llm
 
 
@@ -200,7 +276,7 @@ def _is_report_request(text: str) -> bool:
     ):
         return False
     return any(k in text for k in ("日报", "晨报", "报表")) or bool(
-        re.search(r"生成.*(?:日报|报告|晨报|报表)", text)
+        re.search(r"(?:生成|整理成?|写成?|输出|做成|汇总成).*(?:日报|报告|晨报|报表)", text)
     )
 
 
@@ -233,6 +309,9 @@ def _is_focused_topic_report(text: str) -> bool:
 
 def _keyword_classify(text: str, today: date | None = None) -> RouteResult | None:
     today = today or datetime.now(_LOCAL_TZ).date()
+
+    if _is_jailbreak_request(text):
+        return RouteResult(intents=[Intent.UNSUPPORTED])
 
     # 定时任务（重复性任务管理优先级最高，防止「每天…生成日报」误判为一次性日报）
     if any(k in text for k in ("定时任务", "查看定时", "取消定时", "停用定时")) or (
@@ -324,6 +403,10 @@ def _keyword_classify(text: str, today: date | None = None) -> RouteResult | Non
             end_date=end,
         )
 
+    # 域外请求须在 web_search / 趋势 / 「今天」兜底之前，避免被搜网或 data_query 吞掉
+    if _is_out_of_scope_request(text):
+        return RouteResult(intents=[Intent.UNSUPPORTED])
+
     # 联网检索须在 data_query / trend 兜底之前，避免「搜一下今天HIIT怎么练」被「今天」吞掉
     if is_web_search_request(text):
         return RouteResult(Intent.WEB_SEARCH, domain=_infer_domain_from_text(text))
@@ -378,6 +461,14 @@ def _parse_action_date_range(text: str, today: date) -> tuple[date | None, date 
                 candidates.append((today - timedelta(days=days - 1), today))
             break
 
+    # 最近一周 / 上周 / 本周 → 近 7 天；最近一个月 / 本月 → 近 30 天
+    from myfitness.agents.tools.query_planner import _RELATIVE_MONTH_RE, _RELATIVE_WEEK_RE
+
+    if _RELATIVE_WEEK_RE.search(text):
+        candidates.append((today - timedelta(days=6), today))
+    elif _RELATIVE_MONTH_RE.search(text):
+        candidates.append((today - timedelta(days=29), today))
+
     # 显式日期（N月N日 / YYYY-MM-DD / M.D）：消息中可能多个，逐个作为单日点
     for d in _iter_explicit_dates(text, today):
         candidates.append((d, d))
@@ -431,6 +522,16 @@ def _iter_explicit_dates(text: str, today: date) -> Iterator[date]:
             yield d
 
 
+def _is_jailbreak_request(text: str) -> bool:
+    return bool(_JAILBREAK_RE.search(text))
+
+
+def _is_out_of_scope_request(text: str) -> bool:
+    if any(hint in text for hint in _IN_SCOPE_HINTS):
+        return False
+    return bool(_OFF_TOPIC_RE.search(text))
+
+
 def _infer_domain_from_text(text: str) -> str | None:
     if any(k in text for k in ("体重", "体脂", "围度", "公斤", "kg")):
         return "body"
@@ -461,6 +562,7 @@ def agents_for_intent(intent: Intent, domain: str | None = None) -> list[str]:
         Intent.CHART_TRIGGER: [],
         Intent.WEB_SEARCH: [],
         Intent.GENERAL: [],
+        Intent.UNSUPPORTED: [],
         Intent.CONFIRMATION_RESPONSE: [],
     }
     return mapping.get(intent, [])

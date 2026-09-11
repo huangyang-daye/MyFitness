@@ -14,3 +14,11 @@ def isolated_llm_registry(tmp_path, monkeypatch):
     reset_registry()
     yield
     reset_registry()
+
+
+@pytest.fixture(autouse=True)
+def isolate_memory_side_effects(monkeypatch):
+    """单元测试不连真实 Redis，也不把画像向量索引丢进后台线程。"""
+    monkeypatch.setattr("myfitness.memory.working.redis_configured", lambda: False)
+    monkeypatch.setattr("myfitness.memory.redis_client.redis_configured", lambda: False)
+    monkeypatch.setattr("myfitness.memory.long_term.schedule_memory_index", lambda *args, **kwargs: None)

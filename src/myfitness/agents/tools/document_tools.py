@@ -410,6 +410,7 @@ def apply_document_export(
     *,
     agent_outputs=None,
     context=None,
+    source_content: str | None = None,
 ) -> dict[str, Any] | None:
     """用户要求导出文档时，生成独立文档正文并写入文件（支持多格式）。"""
     if not needs_document_write(user_message):
@@ -429,6 +430,7 @@ def apply_document_export(
             context,
             fallback=content_md,
             output_format="docx",
+            source_content=source_content,
         )
     if "md" in formats or "pdf" in formats:
         if docx_body.strip():
@@ -441,6 +443,7 @@ def apply_document_export(
                 context,
                 fallback=content_md,
                 output_format="md",
+                source_content=source_content,
             )
 
     if not any(body.strip() for body in (docx_body, md_body)):

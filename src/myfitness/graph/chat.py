@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -53,6 +54,7 @@ from myfitness.config import get_settings
 from myfitness.graph.orchestrator import resume_pending_plan, run_orchestrated_turn
 from myfitness.graph.planner import should_use_orchestrator
 from myfitness.graph.progress import ProgressCallback, emit, label_for
+from myfitness.graph.refusal import UNSUPPORTED_REPLY, should_refuse
 from myfitness.graph.router import RouteResult, agents_for_intent, classify_intent
 from myfitness.llm.factory import is_llm_configured
 from myfitness.memory.manager import apply_memory_for_turn, attach_memory
@@ -60,6 +62,7 @@ from myfitness.schemas.agent_outputs import AgentOutputs
 from myfitness.schemas.state import (
     Artifact,
     ChatMessage,
+    ContextSnapshot,
     GraphMetadata,
     Intent,
     MyFitnessGraphState,
@@ -78,6 +81,45 @@ class ChatTurnResult:
     stream: bool = False
 
 
+_CONTEXTUAL_REPORT_FOLLOWUP_RE = re.compile(
+    r"^(?:请)?(?:根据|把)?"
+    r"(?:刚才|上面|上述|以上|前面)?(?:的)?"
+    r"(?:内容|分析|建议|结果|对话(?:记录|内容)?|会话(?:记录|内容)?)?"
+    r"(?:生成|整理成?|写成?|输出|做成|汇总成)"
+    r"(?:一份)?(?:pdf|word|markdown|md)?(?:专项)?报告(?:文档)?[。.!！]?$",
+    re.IGNORECASE,
+)
+_CONTEXTUAL_SOURCE_INTENTS = {
+    Intent.DATA_QUERY,
+    Intent.TREND_ANALYSIS,
+    Intent.PLAN_ADJUST,
+    Intent.GOAL_SETTING,
+    Intent.GENERAL,
+    Intent.WEB_SEARCH,
+}
+_ANALYSIS_REQUEST_HINTS = (
+    "建议",
+    "分析",
+    "评估",
+    "规划",
+    "计划",
+    "总结",
+    "趋势",
+    "对比",
+    "怎么练",
+    "怎么吃",
+)
+_EXPLICIT_REPORT_KINDS = (
+    "日报",
+    "晨报",
+    "报表",
+    "综合报告",
+    "完整报告",
+    "健康报告",
+    "周期报告",
+)
+
+
 def new_chat_state(user_id: int = 1, session_id: str | None = None) -> MyFitnessGraphState:
     return MyFitnessGraphState(
         user_id=user_id,
@@ -85,6 +127,23 @@ def new_chat_state(user_id: int = 1, session_id: str | None = None) -> MyFitness
         mode=RunMode.CHAT,
         metadata=GraphMetadata(started_at=datetime.now(UTC), agents_invoked=[]),
     )
+
+
+_RESUME_GRAPH_RE = re.compile(r"^(继续|接着|继续生成|resume)([。.!！]?)$", re.IGNORECASE)
+
+
+def _should_resume_incomplete_graph(state: MyFitnessGraphState) -> bool:
+    """用户显式要求继续，且会话标记了未完成的分析断点。"""
+    if not state.metadata.graph_incomplete:
+        return False
+    if not _RESUME_GRAPH_RE.match((state.user_message or "").strip()):
+        return False
+    try:
+        from myfitness.graph.langgraph_flow import has_incomplete_checkpoint
+
+        return has_incomplete_checkpoint(state.session_id)
+    except Exception:
+        return False
 
 
 def run_chat_turn(
@@ -113,6 +172,10 @@ def prepare_chat_turn(
     message: str,
     on_progress: ProgressCallback | None = None,
 ) -> ChatTurnResult:
+    previous_intent = state.intent
+    previous_domain = state.intent_domain
+    previous_context = state.context
+    previous_agent_outputs = state.agent_outputs
     state.user_message = message.strip()
     state.messages.append(
         ChatMessage(role="user", content=state.user_message, timestamp=datetime.now(UTC))
@@ -138,6 +201,13 @@ def prepare_chat_turn(
     )
     state.intent = route.intent
     state.intent_domain = route.domain
+
+    if should_refuse(route):
+        emit(on_progress, f"{label_for('unsupported')}…")
+        state.reply = UNSUPPORTED_REPLY
+        state.metadata.agents_invoked = ["unsupported"]
+        _append_assistant(state)
+        return ChatTurnResult(state=state, stream=False)
 
     emit(on_progress, f"{label_for('memory')}…")
     memory_bundle = apply_memory_for_turn(session, state, intent=route.intent)
@@ -173,6 +243,17 @@ def prepare_chat_turn(
         _handle_schedule(session, state)
         return ChatTurnResult(state=state, stream=False)
 
+    if _is_contextual_report_followup(state, route, previous_intent):
+        emit(on_progress, "整理上一轮分析为报告…")
+        _handle_contextual_report(
+            session,
+            state,
+            previous_domain=previous_domain,
+            previous_context=previous_context,
+            previous_agent_outputs=previous_agent_outputs,
+        )
+        return ChatTurnResult(state=state, stream=False)
+
     if route.has(Intent.REPORT_TRIGGER):
         emit(on_progress, f"{label_for('daily_report')}…")
         if has_chart:
@@ -187,15 +268,21 @@ def prepare_chat_turn(
         _handle_chart(session, state, route)
         return ChatTurnResult(state=state, stream=False)
 
-    if should_use_orchestrator(route, state.user_message, use_llm=use_llm):
-        execution, use_stream = run_orchestrated_turn(
-            session,
-            state,
-            route,
-            memory_bundle,
-            on_progress=on_progress,
-            use_llm=use_llm,
-        )
+    resume_graph = _should_resume_incomplete_graph(state)
+    if resume_graph or should_use_orchestrator(route, state.user_message, use_llm=use_llm):
+        try:
+            execution, use_stream = run_orchestrated_turn(
+                session,
+                state,
+                route,
+                memory_bundle,
+                on_progress=on_progress,
+                use_llm=use_llm,
+                resume=resume_graph,
+            )
+        except InterruptedError:
+            state.metadata.graph_incomplete = True
+            raise
         if execution.needs_confirmation:
             _append_assistant(state)
             return ChatTurnResult(state=state, stream=False)
@@ -229,7 +316,7 @@ def prepare_chat_turn(
         start_date=route.start_date,
         end_date=route.end_date,
     )
-    if memory_bundle.short_term or memory_bundle.long_term:
+    if memory_bundle.short_term or memory_bundle.episodic or memory_bundle.long_term:
         state.context = attach_memory(state.context, memory_bundle)
         if memory_bundle.updated or memory_bundle.compressed:
             tools_invoked.append("memory")
@@ -250,7 +337,7 @@ def prepare_chat_turn(
             state.agent_outputs.fitness = run_fitness_agent(state.context)
             invoked.append("fitness_planner")
 
-    if not invoked and route.intent not in {Intent.GENERAL, Intent.WEB_SEARCH}:
+    if not invoked and route.intent not in {Intent.GENERAL, Intent.WEB_SEARCH, Intent.UNSUPPORTED}:
         invoked.append("summary")
 
     invoked.append("summary")
@@ -477,7 +564,7 @@ def _handle_pending_clarification(session: Session, state: MyFitnessGraphState) 
             state.pending_confirmation = None
             return False
         state.reply = (
-            "还需要一个具体日期。请回复例如：昨天、今天、8月24日、2026-08-24，"
+            "还需要一个具体日期。请回复例如：昨天、今天、最近一周、8月24日、2026-08-24，"
             "或一个区间如「8月20日到8月25日」。"
         )
         _append_assistant(state)
@@ -537,7 +624,7 @@ def _handle_sync_and_report(
             state,
             action_type="sync_report_date_clarification",
             prompt=(
-                "你想生成哪天的日报？请回复具体日期，例如：昨天、今天、8月24日，"
+                "你想生成哪天的日报？请回复具体日期，例如：昨天、今天、最近一周、8月24日，"
                 "或 2026-08-24；也可以给一个区间，例如「8月20日到8月25日」。"
                 "确认日期后我会先同步该日数据再生成日报。"
             ),
@@ -647,7 +734,7 @@ def _handle_report(
             state,
             action_type="report_date_clarification",
             prompt=(
-                "你想生成哪天的日报？请回复具体日期，例如：昨天、今天、8月24日，"
+                "你想生成哪天的日报？请回复具体日期，例如：昨天、今天、最近一周、8月24日，"
                 "或 2026-08-24；也可以给一个区间，例如「8月20日到8月25日」。"
             ),
         )
@@ -663,6 +750,98 @@ def _handle_report(
         state.reply = f"生成日报失败：{exc}"
     _append_assistant(state)
     return result
+
+
+def _is_contextual_report_followup(
+    state: MyFitnessGraphState,
+    route: RouteResult,
+    previous_intent: Intent | None,
+) -> bool:
+    """判断本轮是否是“把上一轮分析整理成报告”的省略式跟进。"""
+    text = state.user_message.strip()
+    compact_text = re.sub(r"\s+", "", text)
+    if (
+        route.intents != [Intent.REPORT_TRIGGER]
+        or route.start_date is not None
+        or route.end_date is not None
+        or any(kind in text for kind in _EXPLICIT_REPORT_KINDS)
+        or not _CONTEXTUAL_REPORT_FOLLOWUP_RE.fullmatch(compact_text)
+        or previous_intent not in _CONTEXTUAL_SOURCE_INTENTS
+    ):
+        return False
+
+    previous = _previous_complete_turn(state)
+    if previous is None:
+        return False
+    previous_user, previous_assistant = previous
+    if not previous_assistant.content.strip():
+        return False
+    return any(hint in previous_user.content for hint in _ANALYSIS_REQUEST_HINTS)
+
+
+def _previous_complete_turn(
+    state: MyFitnessGraphState,
+) -> tuple[ChatMessage, ChatMessage] | None:
+    """返回当前用户消息之前紧邻的 user/assistant 完整轮次。"""
+    if len(state.messages) < 3:
+        return None
+    previous_user = state.messages[-3]
+    previous_assistant = state.messages[-2]
+    current_user = state.messages[-1]
+    if (
+        previous_user.role != "user"
+        or previous_assistant.role != "assistant"
+        or current_user.role != "user"
+    ):
+        return None
+    return previous_user, previous_assistant
+
+
+def _handle_contextual_report(
+    session: Session,
+    state: MyFitnessGraphState,
+    *,
+    previous_domain: str | None,
+    previous_context: ContextSnapshot | None,
+    previous_agent_outputs: AgentOutputs,
+) -> None:
+    """把上一轮分析与建议整理为专项文档，不重新走日报生成器。"""
+    previous = _previous_complete_turn(state)
+    if previous is None:  # 防御性回退，正常由判定函数保证
+        state.reply = "没有找到可整理的上一轮分析，请先完成分析后再生成报告。"
+        _append_assistant(state)
+        return
+
+    previous_user, previous_assistant = previous
+    topic = {
+        "fitness": "训练",
+        "nutrition": "饮食营养",
+        "body": "身体数据",
+    }.get(previous_domain, "健康")
+    export_request = (
+        f"根据上一轮关于{topic}的分析和建议，生成一份{topic}专项报告文档，"
+        "不要输出其他内容。"
+        f"\n上一轮用户诉求：{previous_user.content}"
+        f"\n本轮格式要求：{state.user_message}"
+    )
+    try:
+        result = _maybe_export_document(
+            session,
+            state,
+            previous_assistant.content,
+            request_message=export_request,
+            source_content=previous_assistant.content,
+            agent_outputs=previous_agent_outputs,
+            context=previous_context,
+            force=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        state.errors.append(str(exc))
+        state.reply = f"生成上下文报告失败：{exc}"
+        result = None
+    if result is None and not state.reply:
+        state.reply = "未能生成上下文报告，请稍后重试。"
+    _append_assistant(state)
 
 
 def _generate_report(
@@ -846,19 +1025,26 @@ def _maybe_export_document(
     content_md: str,
     *,
     attach_reply: bool = True,
-) -> None:
-    if _document_exported(state):
-        return
+    request_message: str | None = None,
+    source_content: str | None = None,
+    agent_outputs: AgentOutputs | None = None,
+    context: ContextSnapshot | None = None,
+    force: bool = False,
+) -> dict | None:
+    if not force and _document_exported(state):
+        return None
+    effective_request = request_message or state.user_message
     result = apply_document_export(
         session,
         state.user_id,
-        state.user_message,
+        effective_request,
         content_md,
-        agent_outputs=state.agent_outputs,
-        context=state.context,
+        agent_outputs=agent_outputs if agent_outputs is not None else state.agent_outputs,
+        context=context if context is not None else state.context,
+        source_content=source_content,
     )
     if not result:
-        return
+        return None
 
     exports = result.get("exports") or ([result] if result.get("path") else [])
     errors = [item for item in exports if item.get("error")]
@@ -866,7 +1052,7 @@ def _maybe_export_document(
 
     if errors and attach_reply and not successes:
         _append_to_reply(state, f"文档保存失败：{errors[0]['error']}")
-        return
+        return result
 
     _record_tool(state, "write_document")
     for item in successes:
@@ -880,7 +1066,7 @@ def _maybe_export_document(
         )
 
     if not attach_reply:
-        return
+        return result
     if result.get("document_only"):
         state.reply = format_document_saved_reply(result)
         if state.messages and state.messages[-1].role == "assistant":
@@ -890,6 +1076,7 @@ def _maybe_export_document(
             _append_to_reply(state, f"已保存文档：{item['path']}")
         for item in errors:
             _append_to_reply(state, f"文档保存失败（{item.get('format', '?')}）：{item['error']}")
+    return result
 
 
 def _maybe_append_document_notice(state: MyFitnessGraphState) -> None:
