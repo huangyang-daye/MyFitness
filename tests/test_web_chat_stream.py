@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import http.client
-import json
 import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from myfitness.api.web import AgentUiHttpServer, AgentWebApplication
+from myfitness.api.asgi_app import create_app
+from myfitness.api.web import AgentWebApplication
 from myfitness.db.models import Base, User
 from myfitness.schemas.state import ChatMessage
 
@@ -119,7 +119,98 @@ def test_rule_reply_still_emits_delta_without_creating_session_upfront(web_app, 
     assert len(web_app.list_sessions()["sessions"]) == 1
 
 
-def test_http_stream_endpoint_uses_sse(tmp_path, monkeypatch):
+def test_edit_message_interrupts_old_stream_and_reruns_without_deadlock(
+    web_app,
+    monkeypatch,
+):
+    """编辑旧消息应先打断原流，再在同一会话锁内重跑且正常结束。"""
+
+    @contextmanager
+    def fake_scope():
+        yield object()
+
+    stream_started = threading.Event()
+    release_old_chunk = threading.Event()
+
+    def fake_iter_turn(_session, state, message, on_progress=None):
+        state.user_message = message
+        state.messages.append(ChatMessage(role="user", content=message))
+        if on_progress:
+            on_progress("识别意图…")
+
+        def chunks():
+            if message == "原始问题":
+                stream_started.set()
+                release_old_chunk.wait(timeout=2)
+                yield "不应保留的旧回复"
+            else:
+                yield "编辑后的新回复"
+
+        return state, chunks()
+
+    monkeypatch.setattr("myfitness.api.web.session_scope", fake_scope)
+    monkeypatch.setattr("myfitness.api.web.get_or_create_default_user", lambda *_args: None)
+    monkeypatch.setattr("myfitness.api.web.iter_chat_turn", fake_iter_turn)
+
+    session_id = web_app.create_session()["session_id"]
+    old_abort_evt = web_app._abort_event_for(session_id)
+    old_events: list[tuple[str, dict]] = []
+    edit_events: list[tuple[str, dict]] = []
+    old_results: list[dict] = []
+    edit_results: list[dict] = []
+    errors: list[Exception] = []
+
+    def run_old_stream():
+        try:
+            old_results.append(
+                web_app.stream_message(
+                    session_id,
+                    "原始问题",
+                    emit=lambda name, data: old_events.append((name, data)),
+                )
+            )
+        except Exception as exc:  # pragma: no cover - 线程错误转交主线程断言
+            errors.append(exc)
+
+    def run_edit():
+        try:
+            edit_results.append(
+                web_app.edit_message(
+                    session_id,
+                    0,
+                    "编辑后的问题",
+                    emit=lambda name, data: edit_events.append((name, data)),
+                )
+            )
+        except Exception as exc:  # pragma: no cover - 线程错误转交主线程断言
+            errors.append(exc)
+
+    old_thread = threading.Thread(target=run_old_stream, daemon=True)
+    old_thread.start()
+    assert stream_started.wait(timeout=1)
+
+    edit_thread = threading.Thread(target=run_edit, daemon=True)
+    edit_thread.start()
+    assert old_abort_evt.wait(timeout=1), "编辑请求应优先发送旧流中断信号"
+    release_old_chunk.set()
+
+    old_thread.join(timeout=2)
+    edit_thread.join(timeout=2)
+    assert not old_thread.is_alive()
+    assert not edit_thread.is_alive(), "编辑重跑不应重复获取会话锁而死锁"
+    assert errors == []
+    assert old_results and edit_results
+    assert any(name == "aborted" for name, _ in old_events)
+    assert edit_events[-1][0] == "done"
+
+    saved = web_app.history.load(session_id)
+    assert [item.content for item in saved.messages if item.role == "user"] == [
+        "编辑后的问题"
+    ]
+    assert saved.messages[-1].content == "编辑后的新回复"
+
+
+def test_fastapi_stream_endpoint_uses_sse(tmp_path, monkeypatch):
     @contextmanager
     def fake_scope():
         yield object()
@@ -131,46 +222,19 @@ def test_http_stream_endpoint_uses_sse(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("myfitness.api.web.iter_chat_turn", _fake_iter_turn)
 
-    app = AgentWebApplication(tmp_path, history_dir=tmp_path / "chats")
-    server = AgentUiHttpServer(("127.0.0.1", 0), app)
-    thread = threading.Thread(
-        target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
-    )
-    thread.start()
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-        empty = json.dumps({"message": "  "}).encode()
-        conn.request(
-            "POST",
-            "/api/sessions/stream",
-            body=empty,
-            headers={"Content-Type": "application/json", "Content-Length": str(len(empty))},
-        )
-        rejected = conn.getresponse()
-        assert rejected.status == 400
-        assert "json" in (rejected.getheader("Content-Type") or "")
-        assert rejected.read()
-        conn.close()
+    web = AgentWebApplication(tmp_path, history_dir=tmp_path / "chats")
+    client = TestClient(create_app(web))
+    rejected = client.post("/api/sessions/stream", json={"message": "  "})
+    assert rejected.status_code == 400
+    assert "json" in (rejected.headers.get("content-type") or "")
 
-        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-        body = json.dumps({"message": "开始对话"}).encode()
-        conn.request(
-            "POST",
-            "/api/sessions/stream",
-            body=body,
-            headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
-        )
-        response = conn.getresponse()
-        assert response.status == 200
-        assert "text/event-stream" in (response.getheader("Content-Type") or "")
-        raw = response.read().decode("utf-8")
-        assert "event: progress" in raw
-        assert "event: session" in raw
-        assert "event: delta" in raw
-        assert "你好" in raw
-        assert "event: done" in raw
-        conn.close()
-        assert app.list_sessions()["sessions"]
-    finally:
-        server.shutdown()
-        server.server_close()
+    with client.stream("POST", "/api/sessions/stream", json={"message": "开始对话"}) as response:
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        raw = "".join(response.iter_text())
+    assert "event: progress" in raw
+    assert "event: session" in raw
+    assert "event: delta" in raw
+    assert "你好" in raw
+    assert "event: done" in raw
+    assert web.list_sessions()["sessions"]

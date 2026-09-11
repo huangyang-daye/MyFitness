@@ -1,27 +1,22 @@
-"""Dependency-free local Web UI server for MyFitness Agent."""
+"""Agent Web 应用层 — 会话/知识库/模型等业务逻辑（由 FastAPI 路由调用）。"""
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import threading
-import webbrowser
 from collections.abc import Callable
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import quote, unquote
 
 from myfitness.chat_history import (
-    ChatHistoryError,
     ChatHistoryStore,
-    ChatSessionNotFound,
 )
 from myfitness.config import get_settings
 from myfitness.db.repositories.reports import ScheduledTaskRepository
 from myfitness.db.session import get_or_create_default_user, session_scope
+from myfitness.graph.abort import abort_scope
 from myfitness.graph.chat import (
     finalize_streamed_reply,
     iter_chat_turn,
@@ -31,15 +26,12 @@ from myfitness.graph.chat import (
 from myfitness.llm.factory import LlmConfig, probe_llm_config
 from myfitness.llm.registry import ModelRegistryError, get_registry
 from myfitness.paths import PROJECT_ROOT
-from myfitness.rag.document_parser import MAX_FILE_BYTES, DocumentParseError, parse_document
-from myfitness.rag.knowledge_service import KnowledgeError, KnowledgeNotFound
-from myfitness.services.artifacts import ArtifactError, read_artifact, read_artifact_bytes
+from myfitness.rag.document_parser import parse_document
+from myfitness.services.artifacts import read_artifact, read_artifact_bytes
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parents[1] / "web_static"
 PROBE_TIMEOUT = 30
-MAX_JSON_BYTES = 100_000
-MAX_UPLOAD_BYTES = MAX_FILE_BYTES + 64_000
 
 
 def inline_content_disposition(filename: str) -> str:
@@ -52,6 +44,8 @@ def inline_content_disposition(filename: str) -> str:
         ascii_name = f"artifact{suffix}"
     encoded = quote(filename, safe="")
     return f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
+
+
 TASK_TYPES = {
     ScheduledTaskRepository.TASK_DAILY_REPORT: "生成健康日报",
     ScheduledTaskRepository.TASK_SYNC: "同步训记数据",
@@ -111,7 +105,7 @@ class ScheduledTaskNotFound(ValueError):
 
 
 class AgentWebApplication:
-    """Small application layer shared by the HTTP handler and tests."""
+    """Web UI 应用层：供 FastAPI 路由与单元测试共用。"""
 
     def __init__(
         self,
@@ -244,6 +238,8 @@ class AgentWebApplication:
         message_index: int,
         new_text: str,
         emit: Callable[[str, dict[str, Any]], None] | None = None,
+        *,
+        client_gone: threading.Event | None = None,
     ) -> dict[str, Any]:
         """将指定索引的用户消息改写并重新执行（截断后续消息，清除图状态）。"""
         from myfitness.graph.langgraph_flow import clear_graph_state
@@ -256,9 +252,11 @@ class AgentWebApplication:
 
         lock = self._lock_for(canonical)
         with lock:
-            # 重置打断 Event，供本轮使用
+            # 编辑请求已在等待锁之前打断旧流；取得锁后为重跑创建独立 Event。
+            # 直接调用已持锁的执行函数，避免再次获取同一把非重入锁造成死锁。
             with self._abort_guard:
-                self._abort_events[canonical] = threading.Event()
+                rerun_abort_evt = threading.Event()
+                self._abort_events[canonical] = rerun_abort_evt
 
             state = self.history.load(canonical)
             # 截断到指定用户消息之前（保留 0..message_index-1）
@@ -278,11 +276,19 @@ class AgentWebApplication:
             state.messages = messages[:cut_pos]
             state.reply = ""
             state.errors = []
+            state.metadata.graph_incomplete = False
             # 清除该 session 的图状态
             clear_graph_state(canonical)
             self.history.save(state)
             # 重新执行
-            return self.stream_message(canonical, text, emit=emit)
+            return self._stream_message_locked(
+                canonical,
+                text,
+                state,
+                rerun_abort_evt,
+                emit=emit,
+                client_gone=client_gone,
+            )
 
     def send_message(self, session_id: str, message: str) -> dict[str, Any]:
         text = self._validated_message(message)
@@ -303,11 +309,14 @@ class AgentWebApplication:
         session_id: str | None,
         message: str,
         emit: Callable[[str, dict[str, Any]], None] | None = None,
+        *,
+        client_gone: threading.Event | None = None,
     ) -> dict[str, Any]:
         """处理一轮对话并通过回调推送 SSE 事件。
 
         未提供 session_id 时先在内存中创建会话，等本轮用户消息写入后再注册到
         历史仓库，避免打开空白页就落下一个空会话文件。
+        client_gone：ASGI 层 request.is_disconnected 时置位，与 abort 共用取消路径。
         """
         text = self._validated_message(message)
         created = not session_id
@@ -319,10 +328,6 @@ class AgentWebApplication:
             canonical = self.history.normalize_session_id(str(session_id))
             state = None
 
-        def emit_event(event: str, payload: dict[str, Any]) -> None:
-            if emit is not None:
-                emit(event, payload)
-
         abort_evt = self._abort_event_for(canonical)
         abort_evt.clear()
 
@@ -331,19 +336,57 @@ class AgentWebApplication:
             if not created:
                 state = self.history.load(canonical)
             assert state is not None
-            progress: list[str] = []
+            return self._stream_message_locked(
+                canonical,
+                text,
+                state,
+                abort_evt,
+                emit=emit,
+                client_gone=client_gone,
+            )
 
-            def on_progress(msg) -> None:
-                if abort_evt.is_set():
-                    raise InterruptedError("用户已打断")
-                progress.append(msg)
-                if isinstance(msg, dict):
-                    event = str(msg.get("type") or "progress")
-                    emit_event(event, msg)
-                else:
-                    emit_event("progress", {"text": msg})
+    def _stream_message_locked(
+        self,
+        canonical: str,
+        text: str,
+        state,
+        abort_evt: threading.Event,
+        *,
+        emit: Callable[[str, dict[str, Any]], None] | None = None,
+        client_gone: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """执行一次流式对话；调用方必须已持有该会话锁。"""
 
-            aborted = False
+        def cancelled() -> bool:
+            return abort_evt.is_set() or (client_gone is not None and client_gone.is_set())
+
+        def emit_event(event: str, payload: dict[str, Any]) -> None:
+            if emit is None:
+                return
+            try:
+                emit(event, payload)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                # 客户端断开：取消上游并保存已有状态
+                abort_evt.set()
+                if client_gone is not None:
+                    client_gone.set()
+                raise
+
+        progress: list[str] = []
+
+        def on_progress(msg) -> None:
+            if cancelled():
+                raise InterruptedError("客户端已断开或用户已打断")
+            progress.append(msg)
+            if isinstance(msg, dict):
+                event = str(msg.get("type") or "progress")
+                emit_event(event, msg)
+            else:
+                emit_event("progress", {"text": msg})
+
+        aborted = False
+        disconnected = False
+        with abort_scope(cancelled):
             try:
                 with session_scope() as session:
                     get_or_create_default_user(session, state.user_id)
@@ -355,7 +398,7 @@ class AgentWebApplication:
                     emit_event("session", self.session_payload(state.session_id))
                     reply_parts: list[str] = []
                     for chunk in chunks:
-                        if abort_evt.is_set():
+                        if cancelled():
                             aborted = True
                             break
                         if not chunk:
@@ -365,20 +408,47 @@ class AgentWebApplication:
                     if not aborted:
                         finalize_streamed_reply(state, "".join(reply_parts), session=session)
                     else:
-                        # 保存已有部分回复
+                        # 保存已有部分回复；图断点由 checkpointer 保留
                         partial = "".join(reply_parts)
+                        state.metadata.graph_incomplete = True
                         if partial:
-                            finalize_streamed_reply(state, partial + "\n\n*(已中断)*", session=session)
+                            finalize_streamed_reply(
+                                state,
+                                partial + "\n\n*(已中断，可发送「继续」恢复)*",
+                                session=session,
+                            )
+                        elif not state.reply:
+                            state.reply = "分析已中断，可发送「继续」从断点恢复。"
+                            from myfitness.schemas.state import ChatMessage
+
+                            if not state.messages or state.messages[-1].role != "assistant":
+                                state.messages.append(
+                                    ChatMessage(role="assistant", content=state.reply)
+                                )
             except InterruptedError:
                 aborted = True
-            self.history.save(state)
-            payload = self.session_payload(state.session_id)
-            payload.update({"reply": state.reply, "progress": progress})
-            if aborted:
-                emit_event("aborted", {"session_id": canonical})
-            else:
-                emit_event("done", payload)
-            return payload
+                state.metadata.graph_incomplete = True
+                if not state.reply:
+                    state.reply = "分析已中断，可发送「继续」从断点恢复。"
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                aborted = True
+                disconnected = True
+                state.metadata.graph_incomplete = True
+                if not state.reply:
+                    state.reply = "连接已断开，可发送「继续」从断点恢复。"
+
+        self.history.save(state)
+        payload = self.session_payload(state.session_id)
+        payload.update({"reply": state.reply, "progress": progress})
+        if aborted:
+            if not disconnected:
+                try:
+                    emit_event("aborted", {"session_id": canonical, "resumable": True})
+                except Exception:
+                    logger.debug("无法写入 aborted 事件", exc_info=True)
+        else:
+            emit_event("done", payload)
+        return payload
 
     @staticmethod
     def _validated_message(message: str) -> str:
@@ -549,356 +619,9 @@ class AgentWebApplication:
             return False
 
 
-class AgentUiRequestHandler(BaseHTTPRequestHandler):
-    server: AgentUiHttpServer
+def run_web_ui(*args, **kwargs):
+    """兼容旧导入：转发到 FastAPI 入口。"""
+    from myfitness.api.asgi_app import run_web_ui as _run
 
-    def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        try:
-            if parsed.path == "/api/health":
-                self._json({"status": "ok"})
-                return
-            if parsed.path == "/api/sessions":
-                self._json(self.server.app.list_sessions())
-                return
-            if parsed.path == "/api/scheduled-tasks":
-                self._json(self.server.app.list_scheduled_tasks())
-                return
-            if parsed.path.startswith("/api/sessions/"):
-                session_id = unquote(parsed.path.removeprefix("/api/sessions/"))
-                self._json(self.server.app.session_payload(session_id))
-                return
-            if parsed.path == "/api/models":
-                self._json(self.server.app.list_models())
-                return
-            if parsed.path == "/api/knowledge":
-                self._json(self.server.app.list_knowledge())
-                return
-            if parsed.path == "/api/artifact":
-                query = parse_qs(parsed.query)
-                self._json(
-                    self.server.app.read_artifact_file(query.get("path", [""])[0])
-                )
-                return
-            if parsed.path == "/api/artifact/file":
-                query = parse_qs(parsed.query)
-                self._serve_artifact_file(query.get("path", [""])[0])
-                return
-            self._serve_static(parsed.path)
-        except Exception as exc:  # noqa: BLE001 - HTTP exception boundary
-            self._handle_error(exc)
+    return _run(*args, **kwargs)
 
-    def do_PATCH(self) -> None:
-        parsed = urlparse(self.path)
-        try:
-            if parsed.path.startswith("/api/knowledge/"):
-                raw_id = parsed.path.removeprefix("/api/knowledge/").strip("/")
-                if not raw_id.isdigit():
-                    raise ValueError("知识条目 id 无效")
-                self._json(
-                    self.server.app.update_knowledge(int(raw_id), self._read_json())
-                )
-                return
-            if parsed.path.startswith("/api/scheduled-tasks/"):
-                raw_id = parsed.path.removeprefix("/api/scheduled-tasks/").strip("/")
-                if not raw_id.isdigit():
-                    raise ValueError("定时任务 id 无效")
-                self._json(
-                    self.server.app.update_scheduled_task(int(raw_id), self._read_json())
-                )
-                return
-            self._json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
-        except Exception as exc:  # noqa: BLE001 - HTTP exception boundary
-            self._handle_error(exc)
-
-    def do_POST(self) -> None:
-        parsed = urlparse(self.path)
-        try:
-            if parsed.path == "/api/sessions/stream":
-                body = self._read_json()
-                session_id = str(body.get("session_id") or "").strip() or None
-                self._stream_message(session_id, body.get("message", ""))
-                return
-            if parsed.path.startswith("/api/sessions/") and parsed.path.endswith("/abort"):
-                session_id = unquote(
-                    parsed.path.removeprefix("/api/sessions/").removesuffix("/abort")
-                ).strip("/")
-                self._json(self.server.app.abort_stream(session_id))
-                return
-            if parsed.path.startswith("/api/sessions/") and parsed.path.endswith("/edit"):
-                session_id = unquote(
-                    parsed.path.removeprefix("/api/sessions/").removesuffix("/edit")
-                ).strip("/")
-                body = self._read_json()
-                self._stream_edit(session_id, int(body.get("message_index", 0)), body.get("message", ""))
-                return
-            if parsed.path == "/api/sessions":
-                self._json(self.server.app.create_session(), status=HTTPStatus.CREATED)
-                return
-            if parsed.path.startswith("/api/sessions/") and parsed.path.endswith("/messages"):
-                session_id = unquote(
-                    parsed.path.removeprefix("/api/sessions/").removesuffix("/messages")
-                ).strip("/")
-                body = self._read_json()
-                self._json(self.server.app.send_message(session_id, body.get("message", "")))
-                return
-            if parsed.path == "/api/knowledge/reindex":
-                body = self._read_json()
-                self._json(
-                    self.server.app.reindex_knowledge(full=bool(body.get("full")))
-                )
-                return
-            if parsed.path == "/api/knowledge/parse":
-                filename, file_bytes = self._read_multipart_file()
-                self._json(self.server.app.parse_knowledge_file(filename, file_bytes))
-                return
-            if parsed.path == "/api/knowledge":
-                self._json(
-                    self.server.app.create_knowledge(self._read_json()),
-                    status=HTTPStatus.CREATED,
-                )
-                return
-            if parsed.path == "/api/models":
-                self._json(self.server.app.save_model(self._read_json()))
-                return
-            if parsed.path == "/api/models/test":
-                self._json(self.server.app.test_model(self._read_json()))
-                return
-            if parsed.path.startswith("/api/models/") and parsed.path.endswith("/activate"):
-                model_id = unquote(
-                    parsed.path.removeprefix("/api/models/").removesuffix("/activate")
-                ).strip("/")
-                self._json(self.server.app.activate_model(model_id))
-                return
-            self._json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
-        except Exception as exc:  # noqa: BLE001 - HTTP exception boundary
-            self._handle_error(exc)
-
-    def do_DELETE(self) -> None:
-        parsed = urlparse(self.path)
-        try:
-            if parsed.path.startswith("/api/knowledge/"):
-                raw_id = parsed.path.removeprefix("/api/knowledge/").strip("/")
-                if not raw_id.isdigit():
-                    raise ValueError("知识条目 id 无效")
-                self._json(self.server.app.delete_knowledge(int(raw_id)))
-                return
-            if parsed.path.startswith("/api/models/"):
-                model_id = unquote(parsed.path.removeprefix("/api/models/")).strip("/")
-                if not model_id:
-                    raise ValueError("模型 id 无效")
-                self._json(self.server.app.delete_model(model_id))
-                return
-            self._json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
-        except Exception as exc:  # noqa: BLE001 - HTTP exception boundary
-            self._handle_error(exc)
-
-    def _read_json(self) -> dict[str, Any]:
-        raw = self._read_body(MAX_JSON_BYTES)
-        try:
-            value = json.loads(raw or b"{}")
-        except json.JSONDecodeError as exc:
-            raise ValueError("请求必须是合法 JSON") from exc
-        if not isinstance(value, dict):
-            raise ValueError("JSON 根节点必须是 object")  # noqa: TRY004
-        return value
-
-    def _read_body(self, max_bytes: int) -> bytes:
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError as exc:
-            raise ValueError("Content-Length 无效") from exc
-        if length < 0:
-            raise ValueError("Content-Length 无效")
-        if length > max_bytes:
-            raise ValueError("请求内容过大")
-        return self.rfile.read(length) if length else b""
-
-    def _read_multipart_file(self) -> tuple[str, bytes]:
-        content_type = self.headers.get("Content-Type", "")
-        filename, payload = parse_multipart_file(
-            self._read_body(MAX_UPLOAD_BYTES),
-            content_type,
-        )
-        if not payload:
-            raise ValueError("文件为空")
-        if len(payload) > MAX_FILE_BYTES:
-            raise ValueError(f"文件不能超过 {MAX_FILE_BYTES // (1024 * 1024)}MB")
-        return filename, payload
-
-    def _serve_artifact_file(self, path: str) -> None:
-        payload, content_type, filename = self.server.app.artifact_file_payload(path)
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Content-Disposition", inline_content_disposition(filename))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def _serve_static(self, request_path: str) -> None:
-        name = "index.html" if request_path in {"", "/"} else request_path.lstrip("/")
-        target = (STATIC_DIR / name).resolve()
-        try:
-            target.relative_to(STATIC_DIR.resolve())
-        except ValueError:
-            self._json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
-            return
-        if not target.is_file():
-            self._json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
-            return
-        content_type = {
-            ".html": "text/html; charset=utf-8",
-            ".css": "text/css; charset=utf-8",
-            ".js": "text/javascript; charset=utf-8",
-            ".svg": "image/svg+xml",
-        }.get(target.suffix.lower(), "application/octet-stream")
-        data = target.read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(data)
-
-    def _stream_edit(self, session_id: str, message_index: int, message: str) -> None:
-        try:
-            self.server.app._validated_message(message)
-        except Exception as exc:
-            self._handle_error(exc)
-            return
-
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.send_header("X-Accel-Buffering", "no")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.close_connection = True
-        try:
-            self.server.app.edit_message(session_id, message_index, message, emit=self._write_sse)
-        except Exception as exc:
-            logger.exception("Agent UI edit stream failed")
-            error = str(exc) if isinstance(
-                exc, (ChatHistoryError, ArtifactError, ValueError)
-            ) else "请求处理失败，请查看服务端日志"
-            try:
-                self._write_sse("error", {"error": error})
-            except Exception:
-                logger.debug("无法写入 SSE 错误事件", exc_info=True)
-
-    def _stream_message(self, session_id: str | None, message: str) -> None:
-        try:
-            self.server.app._validated_message(message)
-        except Exception as exc:  # noqa: BLE001 - HTTP exception boundary
-            self._handle_error(exc)
-            return
-
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.send_header("X-Accel-Buffering", "no")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.close_connection = True
-        try:
-            self.server.app.stream_message(session_id, message, emit=self._write_sse)
-        except Exception as exc:
-            logger.exception("Agent UI stream failed")
-            error = str(exc) if isinstance(
-                exc, (ChatHistoryError, ArtifactError, ValueError)
-            ) else "请求处理失败，请查看服务端日志"
-            try:
-                self._write_sse("error", {"error": error})
-            except Exception:
-                logger.debug("无法写入 SSE 错误事件", exc_info=True)
-
-    def _write_sse(self, event: str, payload: dict[str, Any]) -> None:
-        data = json.dumps(payload, ensure_ascii=False)
-        frame = f"event: {event}\ndata: {data}\n\n".encode()
-        self.wfile.write(frame)
-        self.wfile.flush()
-
-    def _json(self, payload: Any, *, status: HTTPStatus = HTTPStatus.OK) -> None:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(data)
-
-    def _handle_error(self, exc: Exception) -> None:
-        if isinstance(exc, (ChatSessionNotFound, ScheduledTaskNotFound, KnowledgeNotFound)):
-            self._json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
-        elif isinstance(
-            exc,
-            (ChatHistoryError, ArtifactError, ValueError, KnowledgeError, DocumentParseError),
-        ):
-            self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
-        else:
-            logger.exception("Agent UI request failed")
-            self._json({"error": "请求处理失败，请查看服务端日志"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
-
-    def log_message(self, format: str, *args: Any) -> None:
-        logger.info("Agent UI: " + format, *args)
-
-
-class AgentUiHttpServer(ThreadingHTTPServer):
-    daemon_threads = True
-
-    def __init__(self, address: tuple[str, int], app: AgentWebApplication) -> None:
-        self.app = app
-        super().__init__(address, AgentUiRequestHandler)
-
-
-def run_web_ui(
-    host: str = "127.0.0.1",
-    port: int = 8765,
-    *,
-    open_browser: bool = True,
-    project_root: str | Path = PROJECT_ROOT,
-) -> None:
-    """Run the local UI until interrupted."""
-    from myfitness.db.sql_logging import configure_sql_logging, is_sql_echo_enabled
-
-    configure_sql_logging()
-    if is_sql_echo_enabled():
-        print("SQL 查询日志已开启（SQL_ECHO 或 DEBUG_MODE）")
-    # Bind first. If the port is occupied, fail before APScheduler creates a
-    # background thread that could keep an otherwise failed process alive.
-    app = AgentWebApplication(project_root)
-    server = AgentUiHttpServer((host, port), app)
-    scheduler_started = False
-    try:
-        from myfitness.scheduler.manager import start_scheduler
-
-        count = start_scheduler()
-        scheduler_started = True
-        logger.info("Agent UI 调度器已启动，共加载 %d 个任务", count)
-    except Exception:
-        logger.exception("Agent UI 调度器启动失败")
-
-    url = f"http://{host}:{server.server_port}"
-    if open_browser:
-        threading.Timer(0.25, lambda: webbrowser.open(url)).start()
-    print(f"MyFitness Agent UI: {url}")
-    print("按 Ctrl+C 停止服务")
-    try:
-        server.serve_forever(poll_interval=0.25)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
-        if scheduler_started:
-            try:
-                from myfitness.scheduler.manager import stop_scheduler
-
-                stop_scheduler()
-            except Exception:
-                logger.exception("Agent UI 调度器停止失败")

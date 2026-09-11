@@ -1,16 +1,16 @@
 """Web 知识库 API 测试。"""
 
-import http.client
-import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from myfitness.api.web import AgentUiHttpServer, AgentWebApplication
+from myfitness.api.asgi_app import create_app
+from myfitness.api.web import AgentWebApplication
 from myfitness.db.models import Base, User
 from myfitness.rag.knowledge_service import KnowledgeError
 
@@ -92,38 +92,13 @@ def test_parse_knowledge_file_fills_title_and_content(web_app):
 
 
 def test_http_parse_knowledge_file(web_app):
-    server = AgentUiHttpServer(("127.0.0.1", 0), web_app)
-    thread = threading.Thread(
-        target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    client = TestClient(create_app(web_app))
+    content = "# 蛋白质\n\n每公斤 1.6g\n".encode()
+    response = client.post(
+        "/api/knowledge/parse",
+        files={"file": ("蛋白.md", content, "text/markdown")},
     )
-    thread.start()
-    try:
-        boundary = "----KnowledgeBoundary"
-        content = "# 蛋白质\n\n每公斤 1.6g\n"
-        body = (
-            f"--{boundary}\r\n"
-            'Content-Disposition: form-data; name="file"; filename="蛋白.md"\r\n'
-            "Content-Type: text/markdown\r\n"
-            "\r\n"
-            f"{content}\r\n"
-            f"--{boundary}--\r\n"
-        ).encode()
-        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-        conn.request(
-            "POST",
-            "/api/knowledge/parse",
-            body=body,
-            headers={
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-                "Content-Length": str(len(body)),
-            },
-        )
-        response = conn.getresponse()
-        payload = response.read().decode("utf-8")
-        conn.close()
-        assert response.status == 200, payload
-        assert "每公斤 1.6g" in payload
-        assert "蛋白" in payload
-    finally:
-        server.shutdown()
-        thread.join(timeout=2)
+    assert response.status_code == 200, response.text
+    payload = response.text
+    assert "每公斤 1.6g" in payload
+    assert "蛋白" in payload

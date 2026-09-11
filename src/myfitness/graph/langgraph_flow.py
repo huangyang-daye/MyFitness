@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
@@ -25,18 +26,55 @@ logger = logging.getLogger(__name__)
 
 _ANALYSIS_GRAPH = None
 _CHECKPOINTER = None
+_CHECKPOINTER_BACKEND: str | None = None
+
+
+def reset_checkpointer_cache() -> None:
+    """测试或切换 Redis 配置后重置全局图 / checkpointer。"""
+    global _ANALYSIS_GRAPH, _CHECKPOINTER, _CHECKPOINTER_BACKEND
+    _ANALYSIS_GRAPH = None
+    _CHECKPOINTER = None
+    _CHECKPOINTER_BACKEND = None
 
 
 def get_checkpointer():
-    """返回全局 MemorySaver checkpointer（进程内内存持久化）。"""
-    global _CHECKPOINTER
-    if _CHECKPOINTER is None:
-        try:
-            from langgraph.checkpoint.memory import MemorySaver
-        except ImportError as exc:
-            raise ImportError('pip install -e ".[agents]"') from exc
-        _CHECKPOINTER = MemorySaver()
+    """返回全局 checkpointer：配置了 REDIS_URL 时用 Redis，否则 MemorySaver。"""
+    global _CHECKPOINTER, _CHECKPOINTER_BACKEND
+    if _CHECKPOINTER is not None:
+        return _CHECKPOINTER
+    try:
+        from langgraph.checkpoint.memory import MemorySaver
+    except ImportError as exc:
+        raise ImportError('pip install -e ".[agents]"') from exc
+
+    backend = "memory"
+    saver = None
+    try:
+        from myfitness.config import get_settings
+
+        settings = get_settings()
+        redis_url = settings.resolved_redis_url()
+        if redis_url:
+            from myfitness.graph.redis_checkpointer import build_redis_checkpointer
+
+            ttl = int(getattr(settings, "checkpoint_ttl_seconds", None) or settings.memory_working_ttl_seconds)
+            saver = build_redis_checkpointer(redis_url, ttl_seconds=ttl)
+            backend = "redis"
+            logger.info("LangGraph checkpointer 使用 Redis")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Redis checkpointer 不可用，回退 MemorySaver: %s", exc)
+        saver = None
+
+    if saver is None:
+        saver = MemorySaver()
+    _CHECKPOINTER = saver
+    _CHECKPOINTER_BACKEND = backend
     return _CHECKPOINTER
+
+
+def checkpointer_backend() -> str:
+    get_checkpointer()
+    return _CHECKPOINTER_BACKEND or "memory"
 
 
 class AnalysisGraphState(TypedDict, total=False):
@@ -69,12 +107,18 @@ class AnalysisContext:
     execution: ExecutionResult = field(default_factory=ExecutionResult)
 
 
-def _ctx(runtime: Runtime[AnalysisContext] | None) -> AnalysisContext:
-    """从 LangGraph Runtime 取出分析上下文。
+_ANALYSIS_CTX: ContextVar[AnalysisContext | None] = ContextVar("mf_analysis_ctx", default=None)
 
-    LangGraph ≥0.6 只向参数名 `runtime`（或类型为 RunnableConfig 的 `config`）注入；
-    自定义 `config: dict` 不会收到配置。
+
+def _ctx(runtime: Runtime[AnalysisContext] | None = None) -> AnalysisContext:
+    """从 ContextVar / LangGraph Runtime 取出分析上下文。
+
+    LangGraph ≥0.6 可通过 runtime.context 注入；0.5.x 不支持 invoke(context=)，
+    统一走 ContextVar，保证跨版本可用。
     """
+    bound = _ANALYSIS_CTX.get()
+    if isinstance(bound, AnalysisContext):
+        return bound
     context = getattr(runtime, "context", None)
     if isinstance(context, AnalysisContext):
         return context
@@ -86,7 +130,7 @@ def _ctx(runtime: Runtime[AnalysisContext] | None) -> AnalysisContext:
         context = None
     if isinstance(context, AnalysisContext):
         return context
-    raise RuntimeError("Analysis graph requires Runtime.context (AnalysisContext)")
+    raise RuntimeError("Analysis graph requires AnalysisContext (ContextVar or Runtime.context)")
 
 
 def plan_node(
@@ -321,28 +365,57 @@ def get_analysis_graph():
 def get_graph_state(thread_id: str) -> dict[str, Any] | None:
     """获取某 thread 的最新图状态快照（用于断点恢复检查）。"""
     try:
-        checkpointer = get_checkpointer()
+        graph = get_analysis_graph()
         config = {"configurable": {"thread_id": thread_id}}
-        snapshot = checkpointer.get(config)
-        if snapshot is None:
+        snapshot = graph.get_state(config)
+        if snapshot is None or not snapshot.values:
             return None
-        return dict(snapshot.channel_values or {})
+        return dict(snapshot.values)
     except Exception:
         return None
+
+
+def has_incomplete_checkpoint(thread_id: str) -> bool:
+    """是否存在未跑完的图断点（get_state().next 非空）。"""
+    try:
+        graph = get_analysis_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = graph.get_state(config)
+        return bool(snapshot and snapshot.next)
+    except Exception:
+        return False
 
 
 def clear_graph_state(thread_id: str) -> None:
     """清除指定 thread 的图状态（用于重新编辑问题时重置）。"""
     try:
         checkpointer = get_checkpointer()
-        # MemorySaver 直接清除存储
+        delete_thread = getattr(checkpointer, "delete_thread", None)
+        if callable(delete_thread):
+            delete_thread(thread_id)
+            return
+        # 兼容旧 MemorySaver 直接清 storage
         storage = getattr(checkpointer, "storage", None)
         if storage is not None:
-            keys_to_del = [k for k in list(storage.keys()) if str(k).startswith(thread_id)]
+            keys_to_del = [k for k in list(storage.keys()) if str(k).startswith(thread_id) or k == thread_id]
             for k in keys_to_del:
                 del storage[k]
     except Exception as exc:
         logger.warning("clear_graph_state failed for %s: %s", thread_id, exc)
+
+
+def _invoke_analysis_graph(graph, payload, config: dict[str, Any], ctx: AnalysisContext):
+    """兼容 LangGraph 0.5（无 context=）与 0.6+（可选 context=）。"""
+    token = _ANALYSIS_CTX.set(ctx)
+    try:
+        try:
+            return graph.invoke(payload, config=config, context=ctx)
+        except TypeError as exc:
+            if "context" not in str(exc):
+                raise
+            return graph.invoke(payload, config=config)
+    finally:
+        _ANALYSIS_CTX.reset(token)
 
 
 def run_analysis_graph(
@@ -355,12 +428,49 @@ def run_analysis_graph(
     plan: TaskPlan | None = None,
     use_llm: bool | None = None,
     thread_id: str | None = None,
+    resume: bool = False,
 ) -> tuple[ExecutionResult, bool]:
     """Invoke 分析子图，返回 (execution, stream_summary)。
 
     thread_id 用于 checkpointer 持久化，默认取 state.session_id。
+    resume=True 时从 Redis/Memory 断点继续（不重新 plan）。
     """
     effective_thread_id = thread_id or state.session_id or "default"
+    config: dict[str, Any] = {
+        "configurable": {
+            "thread_id": effective_thread_id,
+        }
+    }
+    graph = get_analysis_graph()
+
+    if resume or (
+        getattr(state.metadata, "graph_incomplete", False)
+        and has_incomplete_checkpoint(effective_thread_id)
+    ):
+        ctx = AnalysisContext(
+            session=session,
+            chat_state=state,
+            route=route,
+            memory_bundle=memory_bundle,
+            on_progress=on_progress,
+        )
+        emit_step(on_progress, "resume", "从断点恢复分析…")
+        try:
+            final_state = _invoke_analysis_graph(graph, None, config, ctx)
+        except InterruptedError:
+            state.metadata.graph_incomplete = True
+            raise
+        state.metadata.graph_incomplete = False
+        execution = ctx.execution
+        stream = bool((final_state or {}).get("stream_summary"))
+        if execution.needs_confirmation:
+            return execution, False
+        return execution, stream
+
+    # 新一轮：清掉可能残留的未完成断点，避免串台
+    if has_incomplete_checkpoint(effective_thread_id):
+        clear_graph_state(effective_thread_id)
+
     ctx = AnalysisContext(
         session=session,
         chat_state=state,
@@ -386,13 +496,12 @@ def run_analysis_graph(
             if task.intent == Intent.DATA_QUERY and task.params.get("include_latest_body")
         ]
 
-    graph = get_analysis_graph()
-    config: dict[str, Any] = {
-        "configurable": {
-            "thread_id": effective_thread_id,
-        }
-    }
-    final_state = graph.invoke(initial, config=config, context=ctx)
+    try:
+        final_state = _invoke_analysis_graph(graph, initial, config, ctx)
+    except InterruptedError:
+        state.metadata.graph_incomplete = True
+        raise
+    state.metadata.graph_incomplete = False
     execution = ctx.execution
     stream = bool(final_state.get("stream_summary"))
     if execution.needs_confirmation:

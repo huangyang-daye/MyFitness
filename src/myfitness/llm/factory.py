@@ -1,7 +1,7 @@
 import json
 import logging
 import time as _time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -350,16 +350,21 @@ def _parse_stream_line(line: str) -> str | None:
 def stream_chat_completion(
     messages: list[dict[str, str]],
     settings: Settings | None = None,
+    *,
+    should_abort: Callable[[], bool] | None = None,
 ) -> Iterator[str]:
     """OpenAI 兼容 SSE 流式输出：限频 → 重试 → 熔断记录。
 
     首个 token 已输出后的失败不重试（避免重复输出），直接结束流。
+    should_abort 为真时关闭上游响应并停止 yield（客户端断开 / 显式 abort）。
     """
+    from myfitness.graph.abort import is_aborted
+
     cfg = get_llm_config(settings)
     guard = get_llm_guard()
     guard.acquire()
     try:
-        yield from _stream_with_retry(cfg, messages)
+        yield from _stream_with_retry(cfg, messages, should_abort=should_abort or is_aborted)
         guard.record_success()
     except Exception as exc:
         guard.record_failure(str(exc))
@@ -369,6 +374,8 @@ def stream_chat_completion(
 def _stream_with_retry(
     cfg: LlmConfig,
     messages: list[dict[str, str]],
+    *,
+    should_abort: Callable[[], bool] | None = None,
 ) -> Iterator[str]:
     payload: dict[str, Any] = {
         "model": cfg.model,
@@ -388,6 +395,8 @@ def _stream_with_retry(
     first_token_emitted = False
 
     for attempt in range(MAX_RETRIES + 1):
+        if should_abort and should_abort():
+            return
         try:
             with httpx.Client(timeout=float(cfg.timeout)) as client:
                 with client.stream(
@@ -398,6 +407,9 @@ def _stream_with_retry(
                 ) as response:
                     response.raise_for_status()
                     for line in response.iter_lines():
+                        if should_abort and should_abort():
+                            response.close()
+                            return
                         token = _parse_stream_line(line)
                         if token:
                             first_token_emitted = True

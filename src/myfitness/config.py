@@ -85,11 +85,30 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""
     rag_index_batch_size: int = 32
 
-    # 记忆系统 — 短期窗口 + 长期画像 + 上下文压缩
+    # PDF 解析 — 默认 MinerU（布局/表格/OCR 更稳）；可回退 pypdf
+    pdf_parser: str = "mineru"  # mineru | pypdf
+    mineru_api_url: str = ""  # 例如 http://127.0.0.1:8000；留空则走本机包/CLI
+    mineru_api_token: str = ""
+    mineru_backend: str = "pipeline"  # pipeline | hybrid-engine | vlm-engine ...
+    mineru_parse_method: str = "auto"  # auto | txt | ocr
+    mineru_lang: str = "ch"
+    mineru_formula_enable: bool = True
+    mineru_table_enable: bool = True
+    mineru_timeout: int = 600
+    mineru_fallback_pypdf: bool = True
+
+    # 记忆系统 — Redis 工作记忆 + PostgreSQL 情景/画像
     memory_enabled: bool = True
     memory_short_term_turns: int = 8
     memory_compress_chars: int = 1200
     memory_profile_max_items: int = 8
+    redis_url: str = ""
+    memory_working_ttl_seconds: int = 604800  # 7 天
+    memory_redis_timeout: float = 2.0
+    memory_episodic_limit: int = 8
+    memory_vector_pool_size: int = 2
+    # LangGraph checkpointer TTL（秒）；默认与工作记忆一致
+    checkpoint_ttl_seconds: int = 604800
 
     # 联网检索 — 对话中检索中国互联网公开资料（博查 / 智谱 / HTML 回退）
     web_search_enabled: bool = True
@@ -106,6 +125,29 @@ class Settings(BaseSettings):
     cn_scraper_platforms: str = "auto"  # auto | none | 逗号分隔平台名
     cn_scraper_default_platforms: str = "bilibili"  # auto 且未点名平台时补充检索
     cn_scraper_timeout: int = 25
+
+    @field_validator("pdf_parser")
+    @classmethod
+    def validate_pdf_parser(cls, value: str) -> str:
+        normalized = (value or "mineru").strip().lower()
+        if normalized not in {"mineru", "pypdf"}:
+            raise ValueError("PDF_PARSER 须为 mineru 或 pypdf")
+        return normalized
+
+    @field_validator("mineru_parse_method")
+    @classmethod
+    def validate_mineru_parse_method(cls, value: str) -> str:
+        normalized = (value or "auto").strip().lower()
+        if normalized not in {"auto", "txt", "ocr"}:
+            raise ValueError("MINERU_PARSE_METHOD 须为 auto / txt / ocr")
+        return normalized
+
+    @field_validator("mineru_timeout")
+    @classmethod
+    def validate_mineru_timeout(cls, value: int) -> int:
+        if value < 30 or value > 7200:
+            raise ValueError("MINERU_TIMEOUT 须在 30 ~ 7200 之间")
+        return value
 
     @field_validator("rag_top_k")
     @classmethod
@@ -162,6 +204,37 @@ class Settings(BaseSettings):
         if value < 2 or value > 20:
             raise ValueError("MEMORY_PROFILE_MAX_ITEMS 须在 2 ~ 20 之间")
         return value
+
+    @field_validator("memory_working_ttl_seconds")
+    @classmethod
+    def validate_memory_working_ttl_seconds(cls, value: int) -> int:
+        if value < 60 or value > 30 * 24 * 3600:
+            raise ValueError("MEMORY_WORKING_TTL_SECONDS 须在 60 ~ 2592000 之间")
+        return value
+
+    @field_validator("memory_redis_timeout")
+    @classmethod
+    def validate_memory_redis_timeout(cls, value: float) -> float:
+        if value < 0.2 or value > 10:
+            raise ValueError("MEMORY_REDIS_TIMEOUT 须在 0.2 ~ 10 之间")
+        return value
+
+    @field_validator("memory_episodic_limit")
+    @classmethod
+    def validate_memory_episodic_limit(cls, value: int) -> int:
+        if value < 1 or value > 40:
+            raise ValueError("MEMORY_EPISODIC_LIMIT 须在 1 ~ 40 之间")
+        return value
+
+    @field_validator("memory_vector_pool_size")
+    @classmethod
+    def validate_memory_vector_pool_size(cls, value: int) -> int:
+        if value < 1 or value > 8:
+            raise ValueError("MEMORY_VECTOR_POOL_SIZE 须在 1 ~ 8 之间")
+        return value
+
+    def resolved_redis_url(self) -> str:
+        return (self.redis_url or "").strip()
 
     @field_validator("web_search_provider")
     @classmethod

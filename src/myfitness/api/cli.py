@@ -1541,7 +1541,7 @@ def ui(
     no_open: bool = typer.Option(False, "--no-open", help="启动后不自动打开浏览器"),
 ) -> None:
     """启动三栏式 MyFitness Agent 本地可视化界面。"""
-    from myfitness.api.web import run_web_ui
+    from myfitness.api.asgi_app import run_web_ui
 
     run_web_ui(host=host, port=port, open_browser=not no_open)
 

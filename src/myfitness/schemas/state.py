@@ -28,6 +28,7 @@ class Intent(StrEnum):
     CHART_TRIGGER = "chart_trigger"
     WEB_SEARCH = "web_search"
     GENERAL = "general"
+    UNSUPPORTED = "unsupported"
     CONFIRMATION_RESPONSE = "confirmation_response"
 
 
@@ -120,6 +121,7 @@ class ContextSnapshot(BaseModel):
     retrieved_chunks: list[dict[str, Any]] = Field(default_factory=list)
     web_search_results: list[dict[str, Any]] = Field(default_factory=list)
     memory_short_term: str = ""
+    memory_episodic: str = ""
     memory_long_term: str = ""
     user_profile: dict[str, Any] = Field(default_factory=dict)
     reflection_notes: str = ""
@@ -139,6 +141,8 @@ class GraphMetadata(BaseModel):
     token_usage: dict[str, Any] = Field(default_factory=dict)
     agents_invoked: list[str] = Field(default_factory=list)
     tools_invoked: list[str] = Field(default_factory=list)
+    # 客户端断开 / 打断后分析子图未跑完，可供断点恢复
+    graph_incomplete: bool = False
 
 
 class MyFitnessGraphState(BaseModel):

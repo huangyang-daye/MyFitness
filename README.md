@@ -1,6 +1,6 @@
 # MyFitness
 
-基于 LangGraph 的多 Agent 健康监控系统，支持训记 Open API 同步、PostgreSQL 持久化、日报与对话分析。
+基于 LangGraph 的多 Agent 健康监控系统，支持训记 Open API 同步、PostgreSQL 持久化、日报与对话分析。本地 Agent UI 基于 FastAPI。
 
 详细需求见 [docs/PRD.md](docs/PRD.md)。
 
@@ -99,12 +99,18 @@ myfitness sync --days 7
 
 ### Web 界面
 
-启动可视化界面：
+基于 **FastAPI + uvicorn**。启动可视化界面：
 
 ```powershell
 myfitness ui
 # 不自动打开浏览器，或指定端口
 myfitness ui --no-open --port 8765
+```
+
+也可直接：
+
+```powershell
+uvicorn myfitness.api.asgi_app:app_factory --factory --host 127.0.0.1 --port 8765
 ```
 
 若在 UI 中同步训记时出现 `WinError 10013`，说明启动 UI 的进程被 Windows 防火墙或 Codex 受限运行环境禁止访问外网。请停止该进程，打开项目目录外部的普通 PowerShell，再运行 `myfitness ui`；若仍出现同一错误，请在 Windows 防火墙中允许项目虚拟环境的 `python.exe` 出站访问 HTTPS（443）。
@@ -275,7 +281,7 @@ src/myfitness/
 │   └── context_reflection.py # 作答前核查个体数据是否已从 DB 确认
 ├── agents/               # Specialist Agent 与 tools（查询 / 写入 / 统计图）
 ├── rag/                  # pgvector 索引与语义检索
-├── memory/               # 短期窗口与长期画像
+├── memory/               # Redis 工作记忆 + PostgreSQL 情景/画像
 ├── services/             # 周期报表、上下文加载
 └── api/
     ├── cli.py            # CLI 入口（chat / ui / sync …）

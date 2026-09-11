@@ -23,6 +23,10 @@ dependencies = [
     "python-docx>=1.1.0",
     "fpdf2>=2.8.0",
     "mammoth>=1.8.0",
+    "redis>=5.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +43,9 @@ agents = [
 ]
 cn-search = [
     "cn-scraper-mcp",
+]
+mineru = [
+    "mineru[pipeline]",
 ]
 
 [project.scripts]
