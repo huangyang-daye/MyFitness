@@ -255,14 +255,16 @@ def _parse_date_range(message: str, today: date, intent: Intent) -> tuple[date, 
         return today - timedelta(days=days - 1), today
 
     # 「…到今天 / 至今 + 进度/趋势」表示区间终点是今天，不是只查今天
-    if intent == Intent.TREND_ANALYSIS and (
-        _PROGRESS_END_RE.search(message) or _PROGRESS_HINT_RE.search(message)
+    if (
+        intent == Intent.TREND_ANALYSIS
+        and (_PROGRESS_END_RE.search(message) or _PROGRESS_HINT_RE.search(message))
+        and ("今天" in message or "今日" in message)
     ):
-        if "今天" in message or "今日" in message:
-            explicit = parse_date_range_text(message, today)
-            if explicit[0] is not None:
-                return explicit[0], explicit[1] or today
-            return today - timedelta(days=29), today
+        explicit = parse_date_range_text(message, today)
+        # 单独的「今天」不是区间；「8月1日到今天」才采用解析结果
+        if explicit[0] is not None and explicit[0] != explicit[1]:
+            return explicit[0], explicit[1] or today
+        return today - timedelta(days=29), today
 
     single = parse_single_date(message, today)
     if single is not None and intent != Intent.TREND_ANALYSIS:

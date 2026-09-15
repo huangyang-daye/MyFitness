@@ -66,6 +66,7 @@ scheduler_app = typer.Typer(help="定时任务调度")
 session_app = typer.Typer(help="历史对话管理")
 artifact_app = typer.Typer(help="报表与图表产物查看")
 rag_app = typer.Typer(help="RAG 双路检索（向量 KNN + BM25）")
+skills_app = typer.Typer(help="即插即用 Skill")
 app.add_typer(db_app, name="db")
 app.add_typer(llm_app, name="llm")
 app.add_typer(xunji_app, name="xunji")
@@ -75,6 +76,7 @@ app.add_typer(scheduler_app, name="scheduler")
 app.add_typer(session_app, name="session")
 app.add_typer(artifact_app, name="artifact")
 app.add_typer(rag_app, name="rag")
+app.add_typer(skills_app, name="skills")
 
 console = Console()
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
@@ -325,6 +327,39 @@ def xunji_keys() -> None:
             console.print(f"  - {statuses[name].hint}")
     else:
         console.print("\n[green]同步所需鉴权已就绪（Skill 文档或 .env）。[/green]")
+
+
+@skills_app.command("list")
+def skills_list() -> None:
+    """列出内置与项目目录中已发现的 Skill。"""
+    from myfitness.skills.registry import list_skills, reset_skill_registry
+
+    reset_skill_registry()
+    specs = list_skills(enabled_only=False)
+    if not specs:
+        console.print("未发现 Skill。可将 `SKILL.md` 放到 `skills/<name>/`。")
+        return
+
+    table = Table(title="MyFitness Skills")
+    table.add_column("名称")
+    table.add_column("来源")
+    table.add_column("Handler")
+    table.add_column("阶段")
+    table.add_column("说明")
+    source_label = {"builtin": "内置", "project": "项目"}
+    for spec in specs:
+        desc = spec.description.replace("\n", " ").strip() or "—"
+        if len(desc) > 60:
+            desc = desc[:57] + "…"
+        table.add_row(
+            spec.name,
+            source_label.get(spec.source, spec.source),
+            "是" if spec.has_handler else "否",
+            spec.when,
+            desc,
+        )
+    console.print(table)
+    console.print("\n项目 Skill 目录：`skills/<name>/SKILL.md`（可覆盖同名内置 Skill）")
 
 
 @report_app.command("generate")

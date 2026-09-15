@@ -12,7 +12,7 @@ htmlcov/
 .ruff_cache/
 *.log
 .mypy_cache/
-skills
+/skills
 .workbuddy/
 .cursor/
 

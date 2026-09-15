@@ -11,4 +11,7 @@ from pathlib import Path
 
 # 项目本体根目录：src/myfitness/paths.py -> 上溯两级
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# 用户即插即用 Skill（项目根目录 /skills，含训记文档，默认不进 Git）
 SKILLS_DIR = PROJECT_ROOT / "skills"
+# 随代码发布的内置 Skill
+BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent / "skills" / "catalog"

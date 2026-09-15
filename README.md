@@ -64,6 +64,7 @@ myfitness sync --days 7
 | `myfitness db migrate` | 执行 Alembic 数据库迁移 |
 | `myfitness rag init` | 在现有 PostgreSQL 启用 pgvector 并创建 RAG 表 |
 | `myfitness rag index --full` | 将身体/饮食/训练/报告数据索引到 pgvector |
+| `myfitness skills list` | 列出内置与项目目录中已发现的 Skill |
 | `myfitness sync --days 7` | 同步最近 7 天训记数据 |
 | `myfitness sync --start 2026-08-01 --end 2026-08-21` | 同步指定日期范围 |
 | `myfitness report generate --date 2026-08-24` | 生成单日日报 |
@@ -145,7 +146,7 @@ myfitness chat --session 550e8400-e29b-41d4-a716-446655440000
 
 ### Agent 编排与数据检索
 
-复杂问题会由 **Planner** 拆成可执行任务列表，经 **LangGraph** 子图按 `plan → execute_ready → reflect → judge → summary` 调度（Judge 未通过可回环重跑），**Orchestrator** 在 `execute_ready` 节点内按依赖执行各 Specialist Agent。系统在 Planner 之后还会自动补齐必要的检索子任务，例如：
+复杂问题会由 **Planner** 拆成可执行任务列表，经 **LangGraph** 子图按 `plan → execute_ready → reflect → judge → summary` 调度（Judge 未通过可回环重跑），**Orchestrator** 在 `execute_ready` 节点内按依赖执行各 Specialist Agent。加载上下文时会运行匹配的 **context Skill**（内置 `query-database` 负责查库）。系统在 Planner 之后还会自动补齐必要的检索子任务，例如：
 
 - 个性化饮食 / 减脂建议 → 从数据库拉取**最新体重、体脂**（`latest_metrics`），避免误用知识库中的历史描述；
 - 「今天练背 / 结合过往训练记录」→ 自动扩大日期范围并检索对应肌群的历史训练，而非仅查当天。
@@ -266,13 +267,39 @@ Agent 功能需额外安装：`pip install -e ".[agents]"`，代码中通过 `my
 
 Agent 与同步层应调用 `myfitness.xunji`，不要直接 httpx。详见 `.cursor/rules/xunji-skills.mdc`。
 
+## Skill 即插即用
+
+对话检索阶段会扫描两处 Skill 目录，**同名时项目目录覆盖内置实现**：
+
+| 位置 | 说明 |
+|------|------|
+| `src/myfitness/skills/catalog/` | 随代码发布的内置 Skill（如 `query-database`） |
+| `skills/` | 项目本地 Skill（训记文档、自定义 handler，默认不进 Git） |
+
+每个 Skill 是一个含 `SKILL.md` 的文件夹。可执行 Skill 再提供：
+
+- frontmatter `handler: module:function`，或
+- 同目录 `handler.py`，实现 `run(ctx)`，可选 `should_run(ctx)`
+
+`query-database` 封装「解析日期/数据域 → 必要时拓宽趋势窗口 → 查询 body/nutrition/training」。自定义 Skill 示例：
+
+```text
+skills/my-skill/SKILL.md
+skills/my-skill/handler.py
+```
+
+```bash
+myfitness skills list
+```
+
 ## 项目结构
 
 ```
 src/myfitness/
-├── paths.py              # 路径常量：PROJECT_ROOT / SKILLS_DIR
+├── paths.py              # 路径常量：PROJECT_ROOT / SKILLS_DIR / BUILTIN_SKILLS_DIR
 ├── config.py             # 配置（含 DATA_DIR、LOG_LEVEL、DEBUG_MODE、SQL_ECHO）
 ├── llm/                  # LLM 通用 API（base_url + model）
+├── skills/               # 即插即用 Skill 运行时（catalog / handlers）
 ├── xunji/                # 训记 Skill 客户端
 ├── db/                   # 模型、Repository、sql_logging
 ├── sync/                 # 训记同步
@@ -298,7 +325,7 @@ D:\MyFitness\              ← 项目本体（进 Git）
 ├── src/ tests/ docs/      源码、测试、文档
 ├── migrations/            数据库迁移
 ├── scripts/               一次性脚本
-└── skills/                Skill 定义（本地，不随 Git）
+└── skills/                本地 Skill（训记文档 / 自定义，不随 Git）
 
 D:\MyFitness-data\         ← 使用记录（不进 Git，可单独备份或清理）
 ├── reports/               日报与周期报表（YYYY-MM-DD.md）

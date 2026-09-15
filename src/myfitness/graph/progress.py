@@ -65,6 +65,7 @@ def emit_step(on_progress: ProgressCallback | None, message: str) -> None:
 
 # 用户可见的短标签
 TOOL_LABELS: dict[str, str] = {
+    "query-database": "查询数据库",
     "query_body_metrics": "查询身体数据",
     "query_nutrition_logs": "查询饮食记录",
     "query_training_logs": "查询训练记录",

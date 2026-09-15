@@ -102,6 +102,9 @@ def _llm_plan(message: str, route: RouteResult, today: date) -> TaskPlan | None:
 
 
 def _build_planner_prompt(today: date) -> str:
+    from myfitness.skills.registry import format_skills_for_prompt
+
+    skills_block = format_skills_for_prompt()
     return f"""# 角色
 你是 MyFitness 的任务 Planner。根据用户消息拆分为多个子任务，并标注依赖关系。
 
@@ -116,6 +119,9 @@ def _build_planner_prompt(today: date) -> str:
 - trend_analysis: 趋势/进度/评价类分析
 - web_search: 联网检索公开资料
 - general: 寒暄或说明
+
+# 可用 Skill（即插即用；context Skill 在检索阶段自动执行，不必写成独立 task_type）
+{skills_block}
 
 # 规则
 1. 一条消息含「记录初始数据 + 设定目标 + 评价进度」时，必须拆成多个任务，不能合并。
